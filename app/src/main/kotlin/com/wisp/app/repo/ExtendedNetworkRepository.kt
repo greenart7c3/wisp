@@ -14,6 +14,7 @@ import com.wisp.app.relay.SubscriptionManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
@@ -46,6 +47,7 @@ data class NetworkStats(
 sealed class DiscoveryState {
     data object Idle : DiscoveryState()
     data class FetchingFollowLists(val fetched: Int, val total: Int) : DiscoveryState()
+    data class BuildingGraph(val processed: Int, val total: Int) : DiscoveryState()
     data class ComputingNetwork(val uniqueUsers: Int) : DiscoveryState()
     data class Filtering(val qualified: Int) : DiscoveryState()
     data class FetchingRelayLists(val fetched: Int, val total: Int) : DiscoveryState()
@@ -81,7 +83,7 @@ class ExtendedNetworkRepository(
     companion object {
         private const val TAG = "ExtendedNetworkRepo"
         private const val THRESHOLD = 10
-        private const val FOLLOW_LIST_TIMEOUT_MS = 8_000L
+        private const val FOLLOW_LIST_TIMEOUT_MS = 5_000L
         private const val RELAY_LIST_CHUNK_SIZE = 500
         private const val RELAY_LIST_TIMEOUT_MS = 8_000L
         private const val MAX_EXTENDED_RELAYS = 100
@@ -167,18 +169,38 @@ class ExtendedNetworkRepository(
             val allFilters = chunks.map { chunk -> Filter(kinds = listOf(3), authors = chunk) }
             val msg = if (allFilters.size == 1) ClientMessage.req(subId, allFilters[0])
             else ClientMessage.req(subId, allFilters)
-            val sentCount = relayPool.sendToTopRelays(msg, maxRelays = 15)
 
-            // Coverage-based waiting: poll until 70% of follow lists received,
-            // EOSE from all relays, or hard timeout (8s).
+            // Collect discovery events directly from the relay pool, bypassing the main
+            // event processing pipeline. The main pipeline processes events sequentially
+            // and gets congested with feed events (kind 1/6), causing discovery events
+            // to trickle through slowly. This dedicated collector runs in parallel.
             val coverageTarget = (firstDegree.size * 0.7).toInt()
-            val deadline = System.currentTimeMillis() + FOLLOW_LIST_TIMEOUT_MS
             coroutineScope {
+                val collectorJob = launch {
+                    relayPool.relayEvents.collect { relayEvent: com.wisp.app.relay.RelayEvent ->
+                        if (relayEvent.subscriptionId == subId && relayEvent.event.kind == 3) {
+                            pendingFollowLists[relayEvent.event.pubkey] = relayEvent.event
+                            _discoveryState.value = DiscoveryState.FetchingFollowLists(
+                                fetched = pendingFollowLists.size,
+                                total = firstDegree.size
+                            )
+                        }
+                    }
+                }
+
+                val sentCount = relayPool.sendToTopRelays(msg, maxRelays = 15)
                 val eoseDeferred = async {
                     subManager.awaitEoseCount(subId, sentCount, FOLLOW_LIST_TIMEOUT_MS)
                 }
+                var lastFetched = 0
+                var lastChangeTime = System.currentTimeMillis()
+                val deadline = System.currentTimeMillis() + FOLLOW_LIST_TIMEOUT_MS
                 while (System.currentTimeMillis() < deadline) {
                     val fetched = pendingFollowLists.size
+                    if (fetched != lastFetched) {
+                        lastFetched = fetched
+                        lastChangeTime = System.currentTimeMillis()
+                    }
                     if (fetched >= coverageTarget) {
                         Log.d(TAG, "Follow list coverage target met: $fetched/$coverageTarget")
                         break
@@ -187,11 +209,15 @@ class ExtendedNetworkRepository(
                         Log.d(TAG, "All EOSE received, $fetched follow lists collected")
                         break
                     }
+                    // Stall detection: no new events for 1.5s means relays are done
+                    if (fetched > 0 && System.currentTimeMillis() - lastChangeTime > 1_500) {
+                        Log.d(TAG, "Follow list fetch stalled at $fetched/${firstDegree.size}, proceeding")
+                        break
+                    }
                     kotlinx.coroutines.delay(200)
                 }
-                // Grace period for buffered events to flush through the processing pipeline
-                kotlinx.coroutines.delay(300)
                 eoseDeferred.cancel()
+                collectorJob.cancel()
             }
             subManager.closeSubscription(subId)
             discoveryTotal = 0
@@ -200,12 +226,15 @@ class ExtendedNetworkRepository(
 
             // Step 2: Parse follow lists, count 2nd-degree appearances, collect relay hints.
             // Write followedBy pairs to SQLite in batches to avoid OOM.
+            val followCount = firstDegree.size
+            _discoveryState.value = DiscoveryState.BuildingGraph(0, followCount)
             socialGraphDb.clearAll()
             val relayHints = mutableMapOf<String, MutableSet<String>>()
             var totalDbRows = 0
             val secondDegreeCount = withContext(Dispatchers.Default) {
                 val counts = mutableMapOf<String, Int>()
                 val batch = mutableListOf<Pair<String, String>>()
+                var processed = 0
                 for ((_, event) in pendingFollowLists) {
                     val entries = Nip02.parseFollowList(event)
                     for (entry in entries) {
@@ -222,10 +251,12 @@ class ExtendedNetworkRepository(
                             }
                         }
                     }
+                    processed++
                     if (batch.size >= 5000) {
                         totalDbRows += batch.size
                         socialGraphDb.insertBatch(batch)
                         batch.clear()
+                        _discoveryState.value = DiscoveryState.BuildingGraph(processed, followCount)
                     }
                 }
                 if (batch.isNotEmpty()) {
@@ -234,6 +265,7 @@ class ExtendedNetworkRepository(
                 }
                 counts
             }
+            _discoveryState.value = DiscoveryState.BuildingGraph(followCount, followCount)
 
             _discoveryState.value = DiscoveryState.ComputingNetwork(secondDegreeCount.size)
             Log.d(TAG, "Social graph: inserted $totalDbRows followedBy rows, ${secondDegreeCount.size} unique 2nd-degree follows")
@@ -264,31 +296,47 @@ class ExtendedNetworkRepository(
             // Split into chunks of 500, send all to all relays, 3s timeout.
             val missingRelayLists = relayListRepo.getMissingPubkeys(qualified.toList())
             if (missingRelayLists.isNotEmpty()) {
-                val chunks = missingRelayLists.chunked(RELAY_LIST_CHUNK_SIZE)
+                val rlChunks = missingRelayLists.chunked(RELAY_LIST_CHUNK_SIZE)
                 val rlSubIds = mutableListOf<String>()
                 _discoveryState.value = DiscoveryState.FetchingRelayLists(0, missingRelayLists.size)
 
-                val sentCounts = mutableListOf<Pair<String, Int>>()
-                for ((i, chunk) in chunks.withIndex()) {
-                    val rlSubId = "extnet-rl-$i"
-                    rlSubIds.add(rlSubId)
-                    val filter = Filter(kinds = listOf(10002), authors = chunk)
-                    val sent = relayPool.sendToTopRelays(ClientMessage.req(rlSubId, filter), maxRelays = 10)
-                    sentCounts.add(rlSubId to sent)
-                }
-
-                // Coverage-based waiting: poll until 70% of relay lists received,
-                // EOSE from all relays, or hard timeout.
                 val rlCoverageTarget = (missingRelayLists.size * 0.7).toInt()
-                val rlDeadline = System.currentTimeMillis() + RELAY_LIST_TIMEOUT_MS
                 coroutineScope {
+                    // Dedicated collector for relay list events — same bypass as follow lists
+                    val rlCollected = java.util.concurrent.atomic.AtomicInteger(0)
+                    val collectorJob = launch {
+                        relayPool.relayEvents.collect { relayEvent: com.wisp.app.relay.RelayEvent ->
+                            if (relayEvent.subscriptionId.startsWith("extnet-rl-") && relayEvent.event.kind == 10002) {
+                                relayListRepo.updateFromEvent(relayEvent.event)
+                                val count = rlCollected.incrementAndGet()
+                                _discoveryState.value = DiscoveryState.FetchingRelayLists(
+                                    count, missingRelayLists.size
+                                )
+                            }
+                        }
+                    }
+
+                    val sentCounts = mutableListOf<Pair<String, Int>>()
+                    for ((i, chunk) in rlChunks.withIndex()) {
+                        val rlSubId = "extnet-rl-$i"
+                        rlSubIds.add(rlSubId)
+                        val filter = Filter(kinds = listOf(10002), authors = chunk)
+                        val sent = relayPool.sendToTopRelays(ClientMessage.req(rlSubId, filter), maxRelays = 10)
+                        sentCounts.add(rlSubId to sent)
+                    }
+
                     val eoseDeferreds = sentCounts.map { (subId, count) ->
                         async { subManager.awaitEoseCount(subId, count, RELAY_LIST_TIMEOUT_MS) }
                     }
+                    var rlLastFetched = 0
+                    var rlLastChangeTime = System.currentTimeMillis()
+                    val rlDeadline = System.currentTimeMillis() + RELAY_LIST_TIMEOUT_MS
                     while (System.currentTimeMillis() < rlDeadline) {
-                        val stillMissing = relayListRepo.getMissingPubkeys(qualified.toList()).size
-                        val fetched = missingRelayLists.size - stillMissing
-                        _discoveryState.value = DiscoveryState.FetchingRelayLists(fetched, missingRelayLists.size)
+                        val fetched = rlCollected.get()
+                        if (fetched != rlLastFetched) {
+                            rlLastFetched = fetched
+                            rlLastChangeTime = System.currentTimeMillis()
+                        }
                         if (fetched >= rlCoverageTarget) {
                             Log.d(TAG, "Relay list coverage target met: $fetched/$rlCoverageTarget")
                             break
@@ -297,10 +345,14 @@ class ExtendedNetworkRepository(
                             Log.d(TAG, "All relay list EOSE received, $fetched relay lists collected")
                             break
                         }
+                        if (fetched > 0 && System.currentTimeMillis() - rlLastChangeTime > 1_500) {
+                            Log.d(TAG, "Relay list fetch stalled at $fetched/${missingRelayLists.size}, proceeding")
+                            break
+                        }
                         kotlinx.coroutines.delay(200)
                     }
-                    kotlinx.coroutines.delay(300)
                     eoseDeferreds.forEach { it.cancel() }
+                    collectorJob.cancel()
                 }
                 for (rlSubId in rlSubIds) subManager.closeSubscription(rlSubId)
             }

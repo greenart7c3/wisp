@@ -373,55 +373,24 @@ class StartupCoordinator(
                 follows = cachedFollows.map { it.pubkey }
             }
 
-            // Subscribe feed FIRST, then run extended network discovery in the background.
-            // This gets notes on screen faster — extended network expands the feed later.
+            // Subscribe feed with current follow list and relay routing.
             Log.d("StartupCoord", "Subscribing feed, feedType=${feedSub.feedType.value}")
             feedSub.applyAuthorFilterForFeedType(feedSub.feedType.value)
             feedSub._initLoadingState.value = InitLoadingState.Subscribing
             feedSub.subscribeFeed()
-            Log.d("StartupCoord", "subscribeFeed called, launching extended network in background")
+            Log.d("StartupCoord", "subscribeFeed called")
 
-            // Extended network discovery runs in the background — expands pool + resubscribes
-            // feed when done, so new notes from 2nd-degree follows appear seamlessly.
-            val extNetCache = extendedNetworkRepo.cachedNetwork.value
-            val extNetCacheValid = extNetCache != null && !extendedNetworkRepo.isCacheStale(extNetCache)
-            Log.d("StartupCoord", "extNetCacheValid=$extNetCacheValid follows=${follows.size}")
-
-            if (!extNetCacheValid && follows.isNotEmpty()) {
+            // Safety retry: if the follow list arrived late (after the initial subscribeFeed
+            // call which early-returns on empty authors), wait and retry once.
+            if (follows.isEmpty()) {
                 launch {
-                    // Wait for recently-added relays to connect before discovery.
-                    // After recomputeAndMergeRelays the pool may have 30+ relays but
-                    // only a handful are connected yet — sendToTopRelays only reaches
-                    // connected relays, so we need to wait.
-                    val poolSize = relayPool.getRelayUrls().size
-                    val targetConnected = minOf(10, poolSize * 3 / 10)
-                    relayPool.awaitAnyConnected(minCount = targetConnected, timeoutMs = 5_000)
-                    Log.d("StartupCoord", "Discovery: awaited connections, connectedCount=${relayPool.connectedCount.value}")
-
-                    val progressJob = launch {
-                        extendedNetworkRepo.discoveryState.collect { ds ->
-                            if (ds is DiscoveryState.FetchingFollowLists && isColdStart) {
-                                feedSub._initLoadingState.value = InitLoadingState.DiscoveringNetwork(ds.fetched, ds.total)
-                            }
-                        }
+                    val arrived = withTimeoutOrNull(8_000) {
+                        contactRepo.followList.first { it.isNotEmpty() }
                     }
-                    try {
-                        extendedNetworkRepo.discoverNetwork()
-                    } catch (e: Exception) {
-                        Log.e("StartupCoord", "Extended network discovery failed during init", e)
-                    }
-                    progressJob.cancel()
-
-                    // Expand pool with extended relays and resubscribe feed
-                    val extConfigs = extendedNetworkRepo.getRelayConfigs()
-                    if (extConfigs.isNotEmpty()) {
-                        rebuildRelayPool()
-                        val poolSize = relayPool.getRelayUrls().size
-                        val targetConnected = poolSize * 3 / 10
-                        relayPool.awaitAnyConnected(minCount = targetConnected, timeoutMs = 3_000)
+                    if (arrived != null) {
+                        Log.d("StartupCoord", "Follow list arrived late (${arrived.size} follows), resubscribing feed")
                         feedSub.applyAuthorFilterForFeedType(feedSub.feedType.value)
                         feedSub.resubscribeFeed()
-                        Log.d("StartupCoord", "Extended network ready — resubscribed feed with ${extConfigs.size} extra relays")
                     }
                 }
             }
@@ -660,6 +629,23 @@ class StartupCoordinator(
             .filter { it.url !in baseUrls }
 
         relayPool.updateRelays(pinnedRelays + scoredConfigs + extendedConfigs)
+    }
+
+    /**
+     * Integrate an already-computed extended network into the relay pool and feed.
+     * Called after SocialGraphScreen finishes discovery.
+     */
+    fun integrateExtendedNetwork() {
+        scope.launch {
+            val extConfigs = extendedNetworkRepo.getRelayConfigs()
+            if (extConfigs.isNotEmpty()) {
+                rebuildRelayPool()
+                val poolSize = relayPool.getRelayUrls().size
+                relayPool.awaitAnyConnected(minCount = poolSize * 3 / 10, timeoutMs = 3_000)
+                feedSub.applyAuthorFilterForFeedType(feedSub.feedType.value)
+                feedSub.resubscribeFeed()
+            }
+        }
     }
 
     /** Called by Activity lifecycle — delegates to RelayLifecycleManager. */

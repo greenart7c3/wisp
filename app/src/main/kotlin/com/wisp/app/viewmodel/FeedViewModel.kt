@@ -258,6 +258,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     fun onAppResume(pausedMs: Long) = startup.onAppResume(pausedMs)
     fun refreshRelays() = startup.refreshRelays()
     fun refreshDmsAndNotifications() = startup.refreshDmsAndNotifications()
+    fun integrateExtendedNetwork() = startup.integrateExtendedNetwork()
     fun refreshNotifRepliesEtag() = startup.refreshNotifRepliesEtag()
 
     // -- Feed subscription delegates --

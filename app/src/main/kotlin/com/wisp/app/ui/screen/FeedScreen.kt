@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -73,6 +74,7 @@ import com.wisp.app.relay.ScoredRelay
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import com.wisp.app.nostr.RelaySet
 import com.wisp.app.relay.BroadcastState
 import com.wisp.app.viewmodel.FeedType
@@ -150,6 +152,7 @@ fun FeedScreen(
     var showListPicker by remember { mutableStateOf(false) }
     var showRelayDropdown by remember { mutableStateOf(false) }
     var showFeedTypeDropdown by remember { mutableStateOf(false) }
+    var showSocialGraphDialog by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val userProfile = profileVersion.let { userPubkey?.let { viewModel.eventRepo.getProfileData(it) } }
@@ -285,6 +288,29 @@ fun FeedScreen(
             text = { Text(zapErrorMessage ?: "") },
             confirmButton = {
                 TextButton(onClick = { zapErrorMessage = null }) { Text("OK") }
+            }
+        )
+    }
+
+    if (showSocialGraphDialog) {
+        AlertDialog(
+            onDismissRequest = { showSocialGraphDialog = false },
+            title = { Text("Social graph required") },
+            text = {
+                Text("The extended feed shows posts from friends-of-friends. You need to compute your social graph first.")
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showSocialGraphDialog = false
+                    onSocialGraph()
+                }) {
+                    Text("Go to Social Graph")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSocialGraphDialog = false }) {
+                    Text("Cancel")
+                }
             }
         )
     }
@@ -431,7 +457,11 @@ fun FeedScreen(
                                         text = { Text("Extended") },
                                         onClick = {
                                             showFeedTypeDropdown = false
-                                            viewModel.setFeedType(FeedType.EXTENDED_FOLLOWS)
+                                            if (viewModel.extendedNetworkRepo.cachedNetwork.value == null) {
+                                                showSocialGraphDialog = true
+                                            } else {
+                                                viewModel.setFeedType(FeedType.EXTENDED_FOLLOWS)
+                                            }
                                         },
                                         trailingIcon = if (feedType == FeedType.EXTENDED_FOLLOWS) {{
                                             Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -597,7 +627,19 @@ fun FeedScreen(
                                 )
                             }
                             feedType == FeedType.EXTENDED_FOLLOWS && viewModel.extendedNetworkRepo.cachedNetwork.value == null -> {
-                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                                // Shouldn't normally reach here since the dropdown intercepts,
+                                // but handle it as a fallback
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(
+                                        "Compute your social graph to see posts from friends-of-friends",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Spacer(Modifier.height(12.dp))
+                                    Button(onClick = { onSocialGraph() }) {
+                                        Text("Go to Social Graph")
+                                    }
+                                }
                             }
                             feedType == FeedType.LIST && selectedList == null -> {
                                 Text(

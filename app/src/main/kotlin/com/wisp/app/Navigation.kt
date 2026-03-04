@@ -40,6 +40,7 @@ import com.wisp.app.nostr.SignerIntentBridge
 import com.wisp.app.nostr.SignResult
 import com.wisp.app.repo.SigningMode
 import android.content.Context
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import com.wisp.app.ui.component.NotifBlipSound
 import com.wisp.app.ui.component.WispBottomBar
@@ -316,8 +317,15 @@ fun WispNavHost(
 
     val nonAppRoutes = setOf(Routes.AUTH, Routes.LOADING, Routes.ONBOARDING_PROFILE, Routes.ONBOARDING_SUGGESTIONS, Routes.EXISTING_USER_ONBOARDING)
     val hideBottomBarRoutes = nonAppRoutes
-    val showBottomBar by remember(currentRoute) {
-        derivedStateOf { currentRoute != null && currentRoute !in hideBottomBarRoutes }
+    val socialGraphDiscoveryState by feedViewModel.extendedNetworkRepo.discoveryState.collectAsState()
+    val socialGraphComputing = currentRoute == Routes.SOCIAL_GRAPH && (
+        socialGraphDiscoveryState is com.wisp.app.repo.DiscoveryState.FetchingFollowLists ||
+        socialGraphDiscoveryState is com.wisp.app.repo.DiscoveryState.BuildingGraph ||
+        socialGraphDiscoveryState is com.wisp.app.repo.DiscoveryState.ComputingNetwork ||
+        socialGraphDiscoveryState is com.wisp.app.repo.DiscoveryState.Filtering ||
+        socialGraphDiscoveryState is com.wisp.app.repo.DiscoveryState.FetchingRelayLists)
+    val showBottomBar by remember(currentRoute, socialGraphComputing) {
+        derivedStateOf { currentRoute != null && currentRoute !in hideBottomBarRoutes && !socialGraphComputing }
     }
 
     // After process death, Navigation restores the last screen but the ViewModel
@@ -1139,6 +1147,9 @@ fun WispNavHost(
                 onBack = { navController.popBackStack() },
                 onNavigateToProfile = { pubkey ->
                     navController.navigate("profile/$pubkey")
+                },
+                onNetworkDiscovered = {
+                    feedViewModel.integrateExtendedNetwork()
                 }
             )
         }
@@ -1330,6 +1341,7 @@ fun WispNavHost(
             val creators by onboardingViewModel.creators.collectAsState()
             val news by onboardingViewModel.news.collectAsState()
             val selectedPubkeys by onboardingViewModel.selectedPubkeys.collectAsState()
+            val scope = rememberCoroutineScope()
 
             OnboardingSuggestionsScreen(
                 activeNow = activeNow,
@@ -1340,21 +1352,23 @@ fun WispNavHost(
                 onTogglePubkey = { pubkey -> onboardingViewModel.togglePubkey(pubkey) },
                 totalSelected = selectedPubkeys.size,
                 onContinue = {
-                    onboardingViewModel.finishOnboarding(
-                        relayPool = feedViewModel.relayPool,
-                        contactRepo = feedViewModel.contactRepo,
-                        selectedPubkeys = selectedPubkeys,
-                        signer = activeSigner
-                    )
-                    feedViewModel.setFeedType(FeedType.EXTENDED_FOLLOWS)
-                    feedViewModel.reloadForNewAccount()
-                    relayViewModel.reload()
-                    blossomServersViewModel.reload()
-                    composeViewModel.reloadBlossomRepo()
-                    feedViewModel.initRelays()
-                    walletViewModel.refreshState()
-                    navController.navigate(Routes.LOADING) {
-                        popUpTo(0) { inclusive = true }
+                    scope.launch {
+                        onboardingViewModel.finishOnboarding(
+                            relayPool = feedViewModel.relayPool,
+                            contactRepo = feedViewModel.contactRepo,
+                            selectedPubkeys = selectedPubkeys,
+                            signer = activeSigner
+                        )
+                        feedViewModel.setFeedType(FeedType.EXTENDED_FOLLOWS)
+                        feedViewModel.reloadForNewAccount()
+                        relayViewModel.reload()
+                        blossomServersViewModel.reload()
+                        composeViewModel.reloadBlossomRepo()
+                        feedViewModel.initRelays()
+                        walletViewModel.refreshState()
+                        navController.navigate(Routes.LOADING) {
+                            popUpTo(0) { inclusive = true }
+                        }
                     }
                 }
             )

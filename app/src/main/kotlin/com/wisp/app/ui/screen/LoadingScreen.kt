@@ -89,8 +89,6 @@ fun LoadingScreen(
     LaunchedEffect(minTimeElapsed, initLoadingState, timedOut, feed.size, initialLoadDone) {
         val initDone = initLoadingState == InitLoadingState.Done
         val feedReady = feed.isNotEmpty()
-        // Don't early-exit while discovery is still running
-        val discoveryBusy = initLoadingState is InitLoadingState.DiscoveringNetwork
         if (timedOut && feedReady) {
             viewModel.markLoadingComplete()
             onReady()
@@ -103,7 +101,7 @@ fun LoadingScreen(
             delay(300)
             viewModel.markLoadingComplete()
             onReady()
-        } else if (minTimeElapsed && feed.size >= 5 && !discoveryBusy) {
+        } else if (minTimeElapsed && feed.size >= 5) {
             // Early exit: enough notes to show a useful feed, don't wait for full EOSE
             viewModel.markLoadingComplete()
             onReady()

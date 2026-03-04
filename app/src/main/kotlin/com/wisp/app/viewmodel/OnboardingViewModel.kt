@@ -155,7 +155,11 @@ class OnboardingViewModel(app: Application) : AndroidViewModel(app) {
             viewModelScope.launch {
                 val relayTags = Nip65.buildRelayTags(relays)
                 val relayListEvent = s.signEvent(kind = 10002, content = "", tags = relayTags)
-                relayPool.sendToWriteRelays(ClientMessage.event(relayListEvent))
+                val relayListMsg = ClientMessage.event(relayListEvent)
+                relayPool.sendToWriteRelays(relayListMsg)
+                for (url in RelayConfig.DEFAULT_INDEXER_RELAYS) {
+                    relayPool.sendToRelayOrEphemeral(url, relayListMsg)
+                }
 
                 if (_name.value.isNotBlank() || _about.value.isNotBlank() || _picture.value.isNotBlank()) {
                     val content = buildJsonObject {
@@ -165,7 +169,11 @@ class OnboardingViewModel(app: Application) : AndroidViewModel(app) {
                     }.toString()
 
                     val event = s.signEvent(kind = 0, content = content)
-                    relayPool.sendToWriteRelays(ClientMessage.event(event))
+                    val profileMsg = ClientMessage.event(event)
+                    relayPool.sendToWriteRelays(profileMsg)
+                    for (url in RelayConfig.DEFAULT_INDEXER_RELAYS) {
+                        relayPool.sendToRelayOrEphemeral(url, profileMsg)
+                    }
                 }
 
                 _publishing.value = false
@@ -258,7 +266,7 @@ class OnboardingViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun loadCreators(relayPool: RelayPool) {
         try {
-            val profiles = fetchProfiles(relayPool, CREATOR_PUBKEYS, "onb-creators", null)
+            val profiles = fetchProfiles(relayPool, CREATOR_PUBKEYS, "onb-creators", ACTIVE_RELAYS)
             _creators.value = SuggestionSection(profiles = profiles, isLoading = false)
         } catch (e: Exception) {
             Log.e(TAG, "loadCreators failed: ${e.message}")
@@ -357,8 +365,9 @@ class OnboardingViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Finish onboarding: publish kind 3 follow list (if any selected), mark complete.
+     * Suspend so contactRepo is updated before Navigation proceeds to feed.
      */
-    fun finishOnboarding(
+    suspend fun finishOnboarding(
         relayPool: RelayPool,
         contactRepo: ContactRepository,
         selectedPubkeys: Set<String>,
@@ -374,12 +383,17 @@ class OnboardingViewModel(app: Application) : AndroidViewModel(app) {
             follows = Nip02.addFollow(follows, pubkey)
         }
         val tags = Nip02.buildFollowTags(follows)
-        viewModelScope.launch {
-            val event = s.signEvent(kind = 3, content = "", tags = tags)
-            relayPool.sendToWriteRelays(ClientMessage.event(event))
-            contactRepo.updateFromEvent(event)
-        }
-
+        val event = s.signEvent(kind = 3, content = "", tags = tags)
+        contactRepo.updateFromEvent(event)
         keyRepo.markOnboardingComplete()
+
+        // Fire-and-forget relay publishing
+        viewModelScope.launch {
+            val msg = ClientMessage.event(event)
+            relayPool.sendToWriteRelays(msg)
+            for (url in RelayConfig.DEFAULT_INDEXER_RELAYS) {
+                relayPool.sendToRelayOrEphemeral(url, msg)
+            }
+        }
     }
 }

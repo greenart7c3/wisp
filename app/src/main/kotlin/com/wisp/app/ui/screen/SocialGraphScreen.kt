@@ -1,5 +1,6 @@
 package com.wisp.app.ui.screen
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -61,6 +62,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -92,12 +94,33 @@ fun SocialGraphScreen(
     socialGraphDb: SocialGraphDb,
     userPubkey: String?,
     onBack: () -> Unit,
-    onNavigateToProfile: (String) -> Unit
+    onNavigateToProfile: (String) -> Unit,
+    onNetworkDiscovered: () -> Unit = {}
 ) {
     val discoveryState by extendedNetworkRepo.discoveryState.collectAsState()
     val cachedNetwork by extendedNetworkRepo.cachedNetwork.collectAsState()
     val scope = rememberCoroutineScope()
     val graphViewModel: SocialGraphViewModel = viewModel()
+
+    val isComputing = discoveryState is DiscoveryState.FetchingFollowLists ||
+        discoveryState is DiscoveryState.BuildingGraph ||
+        discoveryState is DiscoveryState.ComputingNetwork ||
+        discoveryState is DiscoveryState.Filtering ||
+        discoveryState is DiscoveryState.FetchingRelayLists
+
+    // Prevent leaving while computing
+    BackHandler(enabled = isComputing) { /* block back navigation */ }
+
+    // Notify once when discovery completes so the feed can resubscribe with new pubkeys
+    var notifiedComplete by remember { mutableStateOf(false) }
+    LaunchedEffect(discoveryState) {
+        if (discoveryState is DiscoveryState.Complete && !notifiedComplete) {
+            notifiedComplete = true
+            onNetworkDiscovered()
+        } else if (discoveryState !is DiscoveryState.Complete) {
+            notifiedComplete = false
+        }
+    }
 
     LaunchedEffect(Unit) {
         extendedNetworkRepo.resetDiscoveryState()
@@ -114,7 +137,7 @@ fun SocialGraphScreen(
             TopAppBar(
                 title = { Text("Social Graph") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = onBack, enabled = !isComputing) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
@@ -165,6 +188,17 @@ fun SocialGraphScreen(
                         progress = if (state.total > 0) state.fetched.toFloat() / state.total else 0f,
                         detail = "${state.fetched} / ${state.total}"
                     )
+                    ComputingWarning()
+                }
+            }
+            is DiscoveryState.BuildingGraph -> {
+                ProgressColumn(padding) {
+                    ProgressContent(
+                        label = "Building graph...",
+                        progress = if (state.total > 0) state.processed.toFloat() / state.total else 0f,
+                        detail = "${state.processed} / ${state.total}"
+                    )
+                    ComputingWarning()
                 }
             }
             is DiscoveryState.ComputingNetwork -> {
@@ -173,6 +207,7 @@ fun SocialGraphScreen(
                         label = "Computing network...",
                         detail = "${state.uniqueUsers} unique users"
                     )
+                    ComputingWarning()
                 }
             }
             is DiscoveryState.Filtering -> {
@@ -181,6 +216,7 @@ fun SocialGraphScreen(
                         label = "Filtering...",
                         detail = "${state.qualified} qualified"
                     )
+                    ComputingWarning()
                 }
             }
             is DiscoveryState.FetchingRelayLists -> {
@@ -190,6 +226,7 @@ fun SocialGraphScreen(
                         progress = if (state.total > 0) state.fetched.toFloat() / state.total else 0f,
                         detail = "${state.fetched} / ${state.total}"
                     )
+                    ComputingWarning()
                 }
             }
             is DiscoveryState.Complete -> {
@@ -226,6 +263,18 @@ private fun ProgressColumn(
     ) {
         content()
     }
+}
+
+@Composable
+private fun ComputingWarning() {
+    Spacer(Modifier.height(24.dp))
+    Text(
+        text = "This may take 2\u20135 minutes. Please stay on this screen until it finishes.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.padding(horizontal = 16.dp)
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
