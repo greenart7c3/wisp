@@ -882,6 +882,7 @@ fun WispNavHost(
                 relayInfoRepo = feedViewModel.relayInfoRepo,
                 onBack = { navController.popBackStack() },
                 onProfileClick = { pk -> navController.navigate("profile/$pk") },
+                onNoteClick = { eventId -> navController.navigate("thread/$eventId") },
                 peerPubkey = pubkey,
                 signer = activeSigner
             )
