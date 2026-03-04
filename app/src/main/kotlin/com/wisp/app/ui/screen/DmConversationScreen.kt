@@ -47,6 +47,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 import com.wisp.app.nostr.ProfileData
 import com.wisp.app.relay.RelayPool
 import com.wisp.app.repo.EventRepository
@@ -224,17 +228,27 @@ fun DmConversationScreen(
                     .fillMaxWidth(),
                 reverseLayout = false
             ) {
-                items(items = messages, key = { it.id }) { msg ->
-                    val icons = msg.relayUrls.map { url ->
-                        url to relayInfoRepo?.getIconUrl(url)
+                var lastDateKey = ""
+                for (msg in messages) {
+                    val dateKey = dayKey(msg.createdAt)
+                    if (dateKey != lastDateKey) {
+                        lastDateKey = dateKey
+                        item(key = "date-$dateKey") {
+                            DateHeader(formatDateHeader(msg.createdAt))
+                        }
                     }
-                    DmBubble(
-                        content = msg.content,
-                        timestamp = msg.createdAt,
-                        isSent = msg.senderPubkey == userPubkey,
-                        eventRepo = eventRepo,
-                        relayIcons = icons
-                    )
+                    item(key = msg.id) {
+                        val icons = msg.relayUrls.map { url ->
+                            url to relayInfoRepo?.getIconUrl(url)
+                        }
+                        DmBubble(
+                            content = msg.content,
+                            timestamp = msg.createdAt,
+                            isSent = msg.senderPubkey == userPubkey,
+                            eventRepo = eventRepo,
+                            relayIcons = icons
+                        )
+                    }
                 }
             }
 
@@ -292,5 +306,51 @@ fun DmConversationScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun DateHeader(label: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        HorizontalDivider(modifier = Modifier.weight(1f))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp)
+        )
+        HorizontalDivider(modifier = Modifier.weight(1f))
+    }
+}
+
+private val dateHeaderFormat = SimpleDateFormat("EEEE, MMMM d", Locale.US)
+private val dateHeaderYearFormat = SimpleDateFormat("EEEE, MMMM d, yyyy", Locale.US)
+
+private fun dayKey(epoch: Long): String {
+    val cal = Calendar.getInstance()
+    cal.timeInMillis = epoch * 1000
+    return "${cal.get(Calendar.YEAR)}-${cal.get(Calendar.DAY_OF_YEAR)}"
+}
+
+private fun formatDateHeader(epoch: Long): String {
+    val msgDate = Date(epoch * 1000)
+    val now = Calendar.getInstance()
+    val msg = Calendar.getInstance().apply { time = msgDate }
+
+    val today = Calendar.getInstance()
+    val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+
+    return when {
+        msg.get(Calendar.YEAR) == today.get(Calendar.YEAR) &&
+                msg.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR) -> "Today"
+        msg.get(Calendar.YEAR) == yesterday.get(Calendar.YEAR) &&
+                msg.get(Calendar.DAY_OF_YEAR) == yesterday.get(Calendar.DAY_OF_YEAR) -> "Yesterday"
+        msg.get(Calendar.YEAR) != now.get(Calendar.YEAR) -> dateHeaderYearFormat.format(msgDate)
+        else -> dateHeaderFormat.format(msgDate)
     }
 }
