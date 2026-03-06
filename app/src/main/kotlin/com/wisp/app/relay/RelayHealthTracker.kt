@@ -20,8 +20,8 @@ class RelayHealthTracker(
         private const val MAX_SESSION_HISTORY = 10
         private const val MIN_SESSIONS_FOR_EVAL = 3
         private const val MIN_SESSION_DURATION_MS = 30_000L
-        private const val BAD_ZERO_EVENT_SESSIONS = 5
-        private const val BAD_DISCONNECT_SESSIONS = 6
+        private const val BAD_ZERO_EVENT_SESSIONS = 8
+        private const val BAD_DISCONNECT_SESSIONS = 8
         private const val BAD_RATE_LIMIT_SESSIONS = 3
         private const val BAD_RELAY_EXPIRY_MS = 24 * 60 * 60 * 1000L // 24 hours
 
@@ -150,6 +150,12 @@ class RelayHealthTracker(
         val session = activeSessions.remove(url) ?: return
         val duration = System.currentTimeMillis() - session.startedAt
         getOrCreateStats(url).totalConnectedMs += duration
+        // Short-lived disconnects are almost certainly app lifecycle transitions
+        // (minimize/close), not actual relay failures — skip failure tracking.
+        if (duration < MIN_SESSION_DURATION_MS) {
+            Log.d(TAG, "Session too short for failure tracking: $url (${duration / 1000}s)")
+            return
+        }
         getOrCreateStats(url).totalFailures++
         recordSession(url, session, duration, isMidSessionFailure = true)
         evaluateRelay(url)

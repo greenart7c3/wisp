@@ -145,7 +145,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     val blossomRepo = BlossomRepository(app, pubkeyHex)
     val relayInfoRepo = RelayInfoRepository()
     val relayScoreBoard = RelayScoreBoard(app, relayListRepo, contactRepo, pubkeyHex)
-    val outboxRouter = OutboxRouter(relayPool, relayListRepo, relayHintStore)
+    val outboxRouter = OutboxRouter(relayPool, relayListRepo, relayHintStore, relayScoreBoard)
     val subManager = SubscriptionManager(relayPool)
     val lifecycleManager = RelayLifecycleManager(
         context = app,
