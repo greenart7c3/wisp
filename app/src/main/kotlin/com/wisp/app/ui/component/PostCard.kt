@@ -252,7 +252,7 @@ fun PostCard(
                             Icon(
                                 Icons.Default.CheckCircle,
                                 contentDescription = "Verified",
-                                tint = Color(0xFFFF8C00),
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(14.dp)
                             )
                         }
@@ -280,12 +280,12 @@ fun PostCard(
                 Spacer(Modifier.width(4.dp))
                 Surface(
                     shape = RoundedCornerShape(4.dp),
-                    color = Color(0xFFFF9800).copy(alpha = 0.15f)
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
                 ) {
                     Text(
                         text = "PoW $powBits",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFFFF9800),
+                        color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                     )
                 }
