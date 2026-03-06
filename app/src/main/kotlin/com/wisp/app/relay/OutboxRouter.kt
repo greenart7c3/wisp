@@ -8,7 +8,8 @@ import com.wisp.app.repo.RelayListRepository
 class OutboxRouter(
     private val relayPool: RelayPool,
     private val relayListRepo: RelayListRepository,
-    private val relayHintStore: com.wisp.app.repo.RelayHintStore? = null
+    private val relayHintStore: com.wisp.app.repo.RelayHintStore? = null,
+    private val relayScoreBoard: RelayScoreBoard? = null
 ) {
     companion object {
         /**
@@ -114,6 +115,7 @@ class OutboxRouter(
         Log.d("RLC", "[OutboxRouter] poolUrls=${poolUrls.size}, connectedCount=${relayPool.connectedCount.value}")
         val relayToAuthors = mutableMapOf<String, MutableSet<String>>()
         val fallbackAuthors = mutableListOf<String>()
+        val trulyUnknown = mutableListOf<String>()
 
         for (author in authors) {
             val writeRelays = relayListRepo.getWriteRelays(author)
@@ -131,19 +133,37 @@ class OutboxRouter(
             }
         }
 
-        // Merge fallback authors into PINNED relays only (not all pool relays).
-        // Broadcasting to the full pool (30+ relays) for authors without relay lists
-        // causes massive duplication. Pinned relays + indexers provide sufficient coverage.
+        // Route fallback authors via scoreboard data (known author→relay mappings from
+        // kind 10002) before dumping to pinned relays. This avoids sending 80+ author queries
+        // to personal relays when the pool shrinks and write relays leave the pool.
         if (fallbackAuthors.isNotEmpty()) {
-            val pinnedUrls = relayPool.getPinnedRelayUrls()
-            val fallbackTargets = if (pinnedUrls.isNotEmpty()) {
-                poolUrls.filter { it in pinnedUrls }
+            val scoreboardRouted = relayScoreBoard?.getRelaysForAuthors(fallbackAuthors)
+
+            if (scoreboardRouted != null && scoreboardRouted.isNotEmpty()) {
+                for ((relayUrl, authors) in scoreboardRouted) {
+                    if (relayUrl.isEmpty()) {
+                        trulyUnknown.addAll(authors)
+                    } else if (relayUrl !in blockedUrls) {
+                        relayToAuthors.getOrPut(relayUrl) { mutableSetOf() }.addAll(authors)
+                    }
+                }
             } else {
-                // No pinned relays known — use first 5 pool relays as fallback
-                poolUrls.take(5)
+                trulyUnknown.addAll(fallbackAuthors)
             }
-            for (url in fallbackTargets) {
-                relayToAuthors.getOrPut(url) { mutableSetOf() }.addAll(fallbackAuthors)
+
+            // Truly unknown authors → high-coverage pinned relays only (not personal relays)
+            if (trulyUnknown.isNotEmpty()) {
+                val coverageCounts = relayScoreBoard?.getCoverageCounts() ?: emptyMap()
+                val pinnedUrls = relayPool.getPinnedRelayUrls()
+                val fallbackTargets = if (pinnedUrls.isNotEmpty()) {
+                    poolUrls.filter { it in pinnedUrls && (coverageCounts[it] ?: 0) >= 10 }
+                        .ifEmpty { poolUrls.filter { it in pinnedUrls }.take(2) }
+                } else {
+                    poolUrls.take(5)
+                }
+                for (url in fallbackTargets) {
+                    relayToAuthors.getOrPut(url) { mutableSetOf() }.addAll(trulyUnknown)
+                }
             }
         }
 
@@ -181,8 +201,10 @@ class OutboxRouter(
             }
         }
 
+        val scoreboardRouted = fallbackAuthors.size - trulyUnknown.size
         Log.d("RLC", "[OutboxRouter] subscribeByAuthors($subId): ${authors.size} authors → " +
-                "${relayToAuthors.size} pool relays targeted, ${fallbackAuthors.size} fallback authors, " +
+                "${relayToAuthors.size} pool relays targeted, ${fallbackAuthors.size} fallback authors " +
+                "($scoreboardRouted scoreboard-routed, ${trulyUnknown.size} truly-unknown), " +
                 "${indexerRelays.size} indexers")
 
         return targetedRelays
