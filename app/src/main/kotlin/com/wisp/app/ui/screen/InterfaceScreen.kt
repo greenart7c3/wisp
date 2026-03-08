@@ -2,10 +2,15 @@ package com.wisp.app.ui.screen
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,11 +18,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,8 +53,10 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.wisp.app.repo.InterfacePreferences
+import com.wisp.app.ui.theme.ThemePreset
+import com.wisp.app.ui.theme.Themes
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun InterfaceScreen(
     interfacePrefs: InterfacePreferences,
@@ -54,6 +65,8 @@ fun InterfaceScreen(
 ) {
     var isLargeText by remember { mutableStateOf(interfacePrefs.isLargeText()) }
     var newNotesHidden by remember { mutableStateOf(interfacePrefs.isNewNotesButtonHidden()) }
+    var selectedTheme by remember { mutableStateOf(interfacePrefs.getTheme()) }
+    var isCustomTheme by remember { mutableStateOf(selectedTheme == "wisp") }
 
     val savedColor = remember { Color(interfacePrefs.getAccentColor()) }
     val initialHsv = remember {
@@ -118,6 +131,42 @@ fun InterfaceScreen(
                         onChanged()
                     }
                 )
+            }
+
+            Spacer(Modifier.height(24.dp))
+
+            // Popular Themes section
+            Text(
+                text = "Popular Themes",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Choose a color scheme",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(12.dp))
+
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Themes.themes.forEach { theme ->
+                    ThemeCard(
+                        theme = theme,
+                        isSelected = selectedTheme == theme.name,
+                        isDark = true,
+                        onClick = {
+                            selectedTheme = theme.name
+                            isCustomTheme = theme.name == "wisp"
+                            interfacePrefs.setTheme(theme.name)
+                            onChanged()
+                        }
+                    )
+                }
             }
 
             Spacer(Modifier.height(24.dp))
@@ -302,5 +351,69 @@ private fun SatBrightnessSquare(
             center = Offset(x, y),
             style = Stroke(width = 1.dp.toPx())
         )
+    }
+}
+
+@Composable
+private fun ThemeCard(
+    theme: ThemePreset,
+    isSelected: Boolean,
+    isDark: Boolean,
+    onClick: () -> Unit
+) {
+    val colors = if (isDark) theme.dark else theme.light
+
+    Card(
+        modifier = Modifier
+            .width(100.dp)
+            .clickable(onClick = onClick)
+            .then(
+                if (isSelected) {
+                    Modifier.border(
+                        width = 2.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                } else {
+                    Modifier
+                }
+            ),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = colors.surface
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .background(colors.primary, RoundedCornerShape(4.dp))
+                )
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .background(colors.secondary, RoundedCornerShape(4.dp))
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(16.dp)
+                    .background(colors.background, RoundedCornerShape(4.dp))
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = theme.displayName,
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.onSurface
+            )
+        }
     }
 }

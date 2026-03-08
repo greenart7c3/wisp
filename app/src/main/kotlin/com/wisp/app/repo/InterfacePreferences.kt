@@ -13,4 +13,7 @@ class InterfacePreferences(context: Context) {
 
     fun isNewNotesButtonHidden(): Boolean = prefs.getBoolean("new_notes_button_hidden", false)
     fun setNewNotesButtonHidden(hidden: Boolean) = prefs.edit().putBoolean("new_notes_button_hidden", hidden).apply()
+
+    fun getTheme(): String = prefs.getString("theme", "wisp") ?: "wisp"
+    fun setTheme(theme: String) = prefs.edit().putString("theme", theme).apply()
 }

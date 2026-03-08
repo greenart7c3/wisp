@@ -28,6 +28,7 @@ class MainActivity : FragmentActivity() {
             var isDarkTheme by rememberSaveable { mutableStateOf(prefs.getBoolean("dark_theme", true)) }
             var accentColor by remember { mutableStateOf(Color(interfacePrefs.getAccentColor())) }
             var isLargeText by remember { mutableStateOf(interfacePrefs.isLargeText()) }
+            var themeName by remember { mutableStateOf(interfacePrefs.getTheme()) }
 
             LaunchedEffect(isDarkTheme) {
                 enableEdgeToEdge(
@@ -44,7 +45,7 @@ class MainActivity : FragmentActivity() {
                 )
             }
 
-            WispTheme(isDarkTheme = isDarkTheme, accentColor = accentColor, isLargeText = isLargeText) {
+            WispTheme(isDarkTheme = isDarkTheme, accentColor = accentColor, isLargeText = isLargeText, themeName = themeName) {
                 WispNavHost(
                     isDarkTheme = isDarkTheme,
                     onToggleTheme = {
@@ -56,6 +57,7 @@ class MainActivity : FragmentActivity() {
                     onInterfaceChanged = {
                         accentColor = Color(interfacePrefs.getAccentColor())
                         isLargeText = interfacePrefs.isLargeText()
+                        themeName = interfacePrefs.getTheme()
                     }
                 )
             }

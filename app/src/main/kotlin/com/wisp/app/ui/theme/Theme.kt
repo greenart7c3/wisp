@@ -44,36 +44,73 @@ fun WispTheme(
     isDarkTheme: Boolean = true,
     accentColor: Color = Color(0xFFFF9800),
     isLargeText: Boolean = false,
+    themeName: String = "wisp",
     content: @Composable () -> Unit
 ) {
-    val secondary = remember(accentColor) { lightenColor(accentColor) }
+    val themePreset = remember(themeName) { Themes.getTheme(themeName) }
+    val isCustomTheme = themeName == "wisp"
+
+    val primary = if (isCustomTheme) accentColor else themePreset.dark.primary
+    val secondary = remember(primary) { lightenColor(primary) }
 
     val colorScheme = if (isDarkTheme) {
-        darkColorScheme(
-            primary = accentColor,
-            onPrimary = Color.White,
-            secondary = secondary,
-            background = Color(0xFF131215),
-            surface = Color(0xFF1F1E21),
-            surfaceVariant = Color(0xFF2B2A2E),
-            onBackground = Color(0xFFE0E0E0),
-            onSurface = Color(0xFFE0E0E0),
-            onSurfaceVariant = Color(0xFF9998A0),
-            outline = Color(0xFF343338)
-        )
+        if (isCustomTheme) {
+            darkColorScheme(
+                primary = accentColor,
+                onPrimary = Color.White,
+                secondary = secondary,
+                background = Color(0xFF131215),
+                surface = Color(0xFF1F1E21),
+                surfaceVariant = Color(0xFF2B2A2E),
+                onBackground = Color(0xFFE0E0E0),
+                onSurface = Color(0xFFE0E0E0),
+                onSurfaceVariant = Color(0xFF9998A0),
+                outline = Color(0xFF343338)
+            )
+        } else {
+            val colors = themePreset.dark
+            darkColorScheme(
+                primary = colors.primary,
+                onPrimary = Color.White,
+                secondary = colors.secondary,
+                background = colors.background,
+                surface = colors.surface,
+                surfaceVariant = colors.surfaceVariant,
+                onBackground = colors.onBackground,
+                onSurface = colors.onSurface,
+                onSurfaceVariant = colors.onSurfaceVariant,
+                outline = colors.outline
+            )
+        }
     } else {
-        lightColorScheme(
-            primary = accentColor,
-            onPrimary = Color.White,
-            secondary = secondary,
-            background = Color(0xFFECECEC),
-            surface = Color(0xFFF5F5F5),
-            surfaceVariant = Color(0xFFE0E0E0),
-            onBackground = Color(0xFF1C1B1F),
-            onSurface = Color(0xFF1C1B1F),
-            onSurfaceVariant = Color(0xFF6B6B6B),
-            outline = Color(0xFFCCCCCC)
-        )
+        if (isCustomTheme) {
+            lightColorScheme(
+                primary = accentColor,
+                onPrimary = Color.White,
+                secondary = secondary,
+                background = Color(0xFFECECEC),
+                surface = Color(0xFFF5F5F5),
+                surfaceVariant = Color(0xFFE0E0E0),
+                onBackground = Color(0xFF1C1B1F),
+                onSurface = Color(0xFF1C1B1F),
+                onSurfaceVariant = Color(0xFF6B6B6B),
+                outline = Color(0xFFCCCCCC)
+            )
+        } else {
+            val colors = themePreset.light
+            lightColorScheme(
+                primary = colors.primary,
+                onPrimary = Color.White,
+                secondary = colors.secondary,
+                background = colors.background,
+                surface = colors.surface,
+                surfaceVariant = colors.surfaceVariant,
+                onBackground = colors.onBackground,
+                onSurface = colors.onSurface,
+                onSurfaceVariant = colors.onSurfaceVariant,
+                outline = colors.outline
+            )
+        }
     }
 
     MaterialTheme(
