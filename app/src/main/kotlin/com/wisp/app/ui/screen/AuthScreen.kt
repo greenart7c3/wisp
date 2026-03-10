@@ -187,7 +187,7 @@ fun AuthScreen(
         OutlinedTextField(
             value = nsecInput,
             onValueChange = { viewModel.updateNsecInput(it) },
-            label = { Text("nsec...") },
+            label = { Text("nsec or npub...") },
             singleLine = true,
             visualTransformation = if (nsecVisible) VisualTransformation.None else PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),

@@ -153,6 +153,11 @@ class StartupCoordinator(
     fun reloadForNewAccount() {
         val newPubkey = getUserPubkey()
 
+        // Clear stale data from previous account
+        notifRepo.clear()
+        eventRepo.clearAll()
+        dmRepo.clear()
+
         // Reload per-account prefs for new pubkey
         eventRepo.currentUserPubkey = newPubkey
         keyRepo.reloadPrefs(newPubkey)

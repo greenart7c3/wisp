@@ -44,11 +44,23 @@ class AuthViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun logIn(): Boolean {
-        val nsec = _nsecInput.value.trim()
-        if (nsec.isBlank()) {
-            _error.value = "Please enter your nsec key"
+        val input = _nsecInput.value.trim()
+        if (input.isBlank()) {
+            _error.value = "Please enter your key"
             return false
         }
+        return when {
+            input.startsWith("nsec1") -> loginWithNsec(input)
+            input.startsWith("npub1") -> loginWithNpub(input)
+            input.length == 64 && input.all { it in '0'..'9' || it in 'a'..'f' } -> loginWithPubkeyHex(input)
+            else -> {
+                _error.value = "Invalid key format — enter an nsec or npub"
+                false
+            }
+        }
+    }
+
+    private fun loginWithNsec(nsec: String): Boolean {
         return try {
             val privkey = Nip19.nsecDecode(nsec)
             val keypair = Keys.fromPrivkey(privkey)
@@ -60,6 +72,36 @@ class AuthViewModel(app: Application) : AndroidViewModel(app) {
             true
         } catch (e: Exception) {
             _error.value = "Invalid nsec key: ${e.message}"
+            false
+        }
+    }
+
+    private fun loginWithNpub(npub: String): Boolean {
+        return try {
+            val pubkey = Nip19.npubDecode(npub)
+            val pubkeyHex = pubkey.toHex()
+            keyRepo.savePubkeyReadOnly(pubkeyHex)
+            keyRepo.reloadPrefs(pubkeyHex)
+            _npub.value = Nip19.npubEncode(pubkey)
+            _nsecInput.value = ""
+            _error.value = null
+            true
+        } catch (e: Exception) {
+            _error.value = "Invalid npub: ${e.message}"
+            false
+        }
+    }
+
+    private fun loginWithPubkeyHex(hex: String): Boolean {
+        return try {
+            keyRepo.savePubkeyReadOnly(hex)
+            keyRepo.reloadPrefs(hex)
+            _npub.value = Nip19.npubEncode(hex.hexToByteArray())
+            _nsecInput.value = ""
+            _error.value = null
+            true
+        } catch (e: Exception) {
+            _error.value = "Invalid pubkey: ${e.message}"
             false
         }
     }

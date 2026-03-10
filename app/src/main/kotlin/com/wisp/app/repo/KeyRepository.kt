@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 
-enum class SigningMode { LOCAL, REMOTE }
+enum class SigningMode { LOCAL, REMOTE, READ_ONLY }
 
 class KeyRepository(private val context: Context) {
     private val masterKey = MasterKey.Builder(context)
@@ -87,10 +87,21 @@ class KeyRepository(private val context: Context) {
             .apply()
     }
 
-    fun getSigningMode(): SigningMode {
-        val mode = encPrefs.getString("signing_mode", null)
-        return if (mode == SigningMode.REMOTE.name) SigningMode.REMOTE else SigningMode.LOCAL
+    fun savePubkeyReadOnly(pubkeyHex: String) {
+        encPrefs.edit()
+            .putString("pubkey", pubkeyHex)
+            .putString("signing_mode", SigningMode.READ_ONLY.name)
+            .remove("privkey")
+            .remove("signer_package")
+            .apply()
     }
+
+    fun getSigningMode(): SigningMode {
+        val mode = encPrefs.getString("signing_mode", null) ?: return SigningMode.LOCAL
+        return try { SigningMode.valueOf(mode) } catch (_: Exception) { SigningMode.LOCAL }
+    }
+
+    fun isReadOnly(): Boolean = getSigningMode() == SigningMode.READ_ONLY
 
     fun getSignerPackage(): String? = encPrefs.getString("signer_package", null)
 

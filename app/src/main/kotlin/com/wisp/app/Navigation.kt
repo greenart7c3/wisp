@@ -185,6 +185,7 @@ fun WispNavHost(
             SigningMode.LOCAL -> {
                 authViewModel.keyRepo.getKeypair()?.let { LocalSigner(it.privkey, it.pubkey) }
             }
+            SigningMode.READ_ONLY -> null
             null -> null
         }
     }
@@ -460,6 +461,14 @@ fun WispNavHost(
                 onAuthenticated = { isNewAccount ->
                     if (isNewAccount) {
                         navController.navigate(Routes.ONBOARDING_PROFILE) {
+                            popUpTo(Routes.AUTH) { inclusive = true }
+                        }
+                    } else if (authViewModel.keyRepo.isReadOnly()) {
+                        feedViewModel.reloadForNewAccount()
+                        relayViewModel.reload()
+                        feedViewModel.initRelays()
+                        authViewModel.keyRepo.markOnboardingComplete()
+                        navController.navigate(Routes.LOADING) {
                             popUpTo(Routes.AUTH) { inclusive = true }
                         }
                     } else {
