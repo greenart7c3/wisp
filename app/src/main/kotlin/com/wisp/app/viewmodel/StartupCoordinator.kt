@@ -491,7 +491,10 @@ class StartupCoordinator(
             }
         }
 
-        // Apply default DM relays if the user has none set (e.g. new account or never configured)
+        // Apply default DM relays if the user has none set (e.g. new account or never configured).
+        // This must be a suspend call — kind 10050 events from the self-data subscription may
+        // still be buffered in EventRouter's processing loop even after EOSE, so we wait
+        // reactively for them to arrive before concluding the user has no DM relays.
         applyDefaultDmRelaysIfEmpty(myPubkey)
 
         // DMs and notifications are not feed-blocking — fire and forget
@@ -500,9 +503,51 @@ class StartupCoordinator(
 
     /**
      * If the user has no DM relays after fetching self-data, apply defaults and broadcast.
+     *
+     * The self-data subscription already requests kind 10050 from indexer relays, but events
+     * are processed asynchronously by EventRouter. We must wait for that processing to
+     * complete before concluding the user has no DM relays. Additionally, we query the
+     * user's write relays (outbox) as a second source in case indexers don't have it.
      */
-    private fun applyDefaultDmRelaysIfEmpty(myPubkey: String) {
-        if (keyRepo.getDmRelays().isNotEmpty()) return
+    private suspend fun applyDefaultDmRelaysIfEmpty(myPubkey: String) {
+        // Fast path: already have DM relays from local storage (previous session) or
+        // from EventRouter processing the self-data response.
+        if (keyRepo.getDmRelays().isNotEmpty()) {
+            Log.d("StartupCoord", "DM relays already set: ${keyRepo.getDmRelays()}")
+            return
+        }
+
+        // The kind 10050 event may still be buffered in EventRouter's processing loop
+        // even though EOSE arrived. Also query the user's write relays as a fallback
+        // source — indexer relays may not have the latest kind 10050.
+        val writeRelayUrls = relayPool.getWriteRelayUrls()
+        if (writeRelayUrls.isNotEmpty()) {
+            val dmRelayFilter = Filter(kinds = listOf(Nip51.KIND_DM_RELAYS), authors = listOf(myPubkey), limit = 1)
+            val reqMsg = ClientMessage.req("dm-relay-check", listOf(dmRelayFilter))
+            for (url in writeRelayUrls) {
+                relayPool.sendToRelayOrEphemeral(url, reqMsg)
+            }
+        }
+
+        // Wait reactively for DM relays to arrive from either source.
+        val arrived = withTimeoutOrNull(8_000) {
+            keyRepo.dmRelaysFlow.first { it.isNotEmpty() }
+        }
+
+        // Clean up the fallback subscription
+        subManager.closeSubscription("dm-relay-check")
+
+        if (arrived != null) {
+            Log.d("StartupCoord", "DM relays arrived during wait: $arrived")
+            return
+        }
+
+        // After thorough checking, user genuinely has no DM relays — apply defaults.
+        // Double-check one more time in case of a late arrival.
+        if (keyRepo.getDmRelays().isNotEmpty()) {
+            Log.d("StartupCoord", "DM relays arrived just before default application: ${keyRepo.getDmRelays()}")
+            return
+        }
 
         val defaults = RelayConfig.DEFAULT_DM_RELAYS
         keyRepo.saveDmRelays(defaults)
