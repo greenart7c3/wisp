@@ -195,7 +195,7 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
         if (!seenEventIds.add(event.id)) return  // atomic dedup across all relay threads
         if (event.created_at > System.currentTimeMillis() / 1000 + 30) return  // reject future-dated notes (30s grace for clock skew)
         if (muteRepo?.isBlocked(event.pubkey) == true) return
-        if (event.kind == 1 && muteRepo?.containsMutedWord(event.content) == true) return
+        if ((event.kind == 1 || event.kind == 30023) && muteRepo?.containsMutedWord(event.content) == true) return
         if (deletedEventsRepo?.isDeleted(event.id) == true) return
         // Engagement events (reactions, reposts) are only needed for their
         // side effects (counts, details, etc.) — skip eventCache to avoid evicting the
@@ -219,6 +219,9 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
                 // Only show root notes in feed, not replies
                 val isReply = event.tags.any { it.size >= 2 && it[0] == "e" }
                 if (!isReply) binaryInsert(event, fromFeed = true)
+            }
+            30023 -> {
+                binaryInsert(event, fromFeed = true)
             }
             6 -> {
                 // Repost: parse embedded event from content and insert it into the feed
@@ -273,7 +276,9 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
             }
             7 -> addReaction(event)
             9735 -> {
-                val targetId = Nip57.getZappedEventId(event) ?: return
+                val targetId = Nip57.getZappedEventId(event)
+                    ?: resolveAddressableTarget(event)
+                    ?: return
                 // Per-target dedup — atomic get-or-create under lock to prevent
                 // concurrent threads from creating separate sets for the same target
                 val dedupSet = synchronized(countedZapIds) {
@@ -310,7 +315,9 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     }
 
     private fun addReaction(event: NostrEvent) {
-        val targetEventId = event.tags.lastOrNull { it.size >= 2 && it[0] == "e" }?.get(1) ?: return
+        val targetEventId = event.tags.lastOrNull { it.size >= 2 && it[0] == "e" }?.get(1)
+            ?: resolveAddressableTarget(event)
+            ?: return
         // Per-target dedup — evicts alongside the count cache so re-fetched data can be re-counted
         val dedupSet = countedReactionIds.get(targetEventId)
             ?: mutableSetOf<String>().also { countedReactionIds.put(targetEventId, it) }
@@ -349,6 +356,21 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
         }
         reactionDirty = true
         markVersionDirty()
+    }
+
+    /**
+     * Resolve an engagement event's target when it only has an a-tag (addressable
+     * coordinate like "30023:<pubkey>:<dtag>") and no e-tag. Looks up the cached
+     * addressable event to return its event ID, so engagement counts are keyed correctly.
+     */
+    private fun resolveAddressableTarget(event: NostrEvent): String? {
+        val aTag = event.tags.lastOrNull { it.size >= 2 && it[0] == "a" }?.get(1) ?: return null
+        val parts = aTag.split(":", limit = 3)
+        if (parts.size < 3) return null
+        val kind = parts[0].toIntOrNull() ?: return null
+        val author = parts[1]
+        val dTag = parts[2]
+        return findAddressableEvent(kind, author, dTag)?.id
     }
 
     private fun effectiveSortTime(event: NostrEvent): Long =
@@ -779,6 +801,11 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
                     relayHintStore?.extractHintsFromTags(event)
                     relayFeedBinaryInsert(event)
                 }
+            }
+            30023 -> {
+                eventCache.put(event.id, event)
+                relayHintStore?.extractHintsFromTags(event)
+                relayFeedBinaryInsert(event)
             }
             6 -> {
                 if (event.content.isNotBlank()) {

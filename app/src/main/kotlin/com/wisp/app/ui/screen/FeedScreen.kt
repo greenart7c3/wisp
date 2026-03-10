@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -85,6 +86,7 @@ import com.wisp.app.viewmodel.InitLoadingState
 import com.wisp.app.viewmodel.PowStatus
 import com.wisp.app.viewmodel.RelayFeedStatus
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.draw.clip
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -718,7 +720,31 @@ fun FeedScreen(
                             state = listState,
                             modifier = Modifier.fillMaxSize()
                         ) {
-                            items(items = feed, key = { it.id }, contentType = { "post" }) { event ->
+                            items(items = feed, key = { it.id }, contentType = { if (it.kind == 30023) "article" else "post" }) { event ->
+                                if (event.kind == 30023) {
+                                    FeedArticleItem(
+                                        event = event,
+                                        viewModel = viewModel,
+                                        userPubkey = userPubkey,
+                                        profileVersion = profileVersion,
+                                        reactionVersion = reactionVersion,
+                                        replyCountVersion = replyCountVersion,
+                                        zapVersion = zapVersion,
+                                        repostVersion = repostVersion,
+                                        isZapAnimating = event.id in zapAnimatingIds,
+                                        isZapInProgress = event.id in zapInProgress,
+                                        isInList = event.id in listedIds,
+                                        onArticleClick = onArticleClick,
+                                        onProfileClick = onProfileClick,
+                                        onReply = { onReply(event) },
+                                        onReact = { emoji -> onReact(event, emoji) },
+                                        onRepost = { onRepost(event) },
+                                        onQuote = { onQuote(event) },
+                                        onZap = { zapTargetEvent = event },
+                                        onAddToList = { onAddToList(event.id) },
+                                        onOpenEmojiLibrary = { showEmojiLibrary = true }
+                                    )
+                                } else {
                                 FeedItem(
                                     event = event,
                                     viewModel = viewModel,
@@ -755,6 +781,7 @@ fun FeedScreen(
                                     onOpenEmojiLibrary = { showEmojiLibrary = true },
                                     translationVersion = translationVersion
                                 )
+                                }
                             }
                             if (initialLoadDone) {
                                 item(key = "load-more", contentType = "loader") {
@@ -944,6 +971,170 @@ private fun FeedItem(
         translationState = translationState,
         onTranslate = { viewModel.translateEvent(event.id, event.content) }
     )
+}
+
+@Composable
+private fun FeedArticleItem(
+    event: NostrEvent,
+    viewModel: FeedViewModel,
+    userPubkey: String?,
+    profileVersion: Int,
+    reactionVersion: Int,
+    replyCountVersion: Int,
+    zapVersion: Int,
+    repostVersion: Int,
+    isZapAnimating: Boolean,
+    isZapInProgress: Boolean = false,
+    isInList: Boolean = false,
+    onArticleClick: ((Int, String, String) -> Unit)?,
+    onProfileClick: (String) -> Unit,
+    onReply: () -> Unit,
+    onReact: (String) -> Unit,
+    onRepost: () -> Unit,
+    onQuote: () -> Unit,
+    onZap: () -> Unit,
+    onAddToList: () -> Unit = {},
+    onOpenEmojiLibrary: (() -> Unit)? = null
+) {
+    val title = remember(event) { event.tags.firstOrNull { it.size >= 2 && it[0] == "title" }?.get(1) }
+    val summary = remember(event) { event.tags.firstOrNull { it.size >= 2 && it[0] == "summary" }?.get(1) }
+    val image = remember(event) { event.tags.firstOrNull { it.size >= 2 && it[0] == "image" }?.get(1) }
+    val dTag = remember(event) { event.tags.firstOrNull { it.size >= 2 && it[0] == "d" }?.get(1) ?: "" }
+    val publishedAt = remember(event) {
+        event.tags.firstOrNull { it.size >= 2 && it[0] == "published_at" }?.get(1)?.toLongOrNull()
+    }
+    val profileData = remember(profileVersion, event.pubkey) {
+        viewModel.eventRepo.getProfileData(event.pubkey)
+    }
+    val likeCount = remember(reactionVersion, event.id) { viewModel.eventRepo.getReactionCount(event.id) }
+    val replyCount = remember(replyCountVersion, event.id) { viewModel.eventRepo.getReplyCount(event.id) }
+    val zapSats = remember(zapVersion, event.id) { viewModel.eventRepo.getZapSats(event.id) }
+    val userEmojis = remember(reactionVersion, event.id, userPubkey) {
+        userPubkey?.let { viewModel.eventRepo.getUserReactionEmojis(event.id, it) } ?: emptySet()
+    }
+    val repostCount = remember(repostVersion, event.id) { viewModel.eventRepo.getRepostCount(event.id) }
+    val hasUserReposted = remember(repostVersion, event.id) { viewModel.eventRepo.hasUserReposted(event.id) }
+    val hasUserZapped = remember(zapVersion, event.id) { viewModel.eventRepo.hasUserZapped(event.id) }
+    val resolvedEmojis by viewModel.customEmojiRepo.resolvedEmojis.collectAsState()
+    val unicodeEmojis by viewModel.customEmojiRepo.unicodeEmojis.collectAsState()
+    val eventReactionEmojiUrls = remember(reactionVersion, event.id) {
+        viewModel.eventRepo.getReactionEmojiUrls(event.id)
+    }
+
+    val displayName = profileData?.displayString
+        ?: "${event.pubkey.take(8)}...${event.pubkey.takeLast(4)}"
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .then(
+                if (onArticleClick != null) Modifier.clickable { onArticleClick(30023, event.pubkey, dTag) }
+                else Modifier
+            )
+    ) {
+        Column {
+            if (image != null) {
+                coil3.compose.AsyncImage(
+                    model = image,
+                    contentDescription = title,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 180.dp)
+                        .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                )
+            }
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                // Author row
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
+                    ProfilePicture(
+                        url = profileData?.picture,
+                        size = 28,
+                        modifier = Modifier.clickable { onProfileClick(event.pubkey) }
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = displayName,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { onProfileClick(event.pubkey) }
+                    )
+                    val timestamp = publishedAt ?: event.created_at
+                    Text(
+                        text = formatFeedArticleTimestamp(timestamp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+                // Article badge + title
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier.padding(end = 8.dp)
+                    ) {
+                        Text(
+                            text = "ARTICLE",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                    Text(
+                        text = title ?: "Untitled Article",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                if (!summary.isNullOrBlank()) {
+                    Text(
+                        text = summary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+            // Action bar
+            com.wisp.app.ui.component.ActionBar(
+                onReply = onReply,
+                onReact = onReact,
+                userReactionEmojis = userEmojis,
+                onRepost = onRepost,
+                onQuote = onQuote,
+                hasUserReposted = hasUserReposted,
+                onZap = onZap,
+                hasUserZapped = hasUserZapped,
+                onAddToList = onAddToList,
+                isInList = isInList,
+                likeCount = likeCount,
+                repostCount = repostCount,
+                replyCount = replyCount,
+                zapSats = zapSats,
+                isZapAnimating = isZapAnimating,
+                isZapInProgress = isZapInProgress,
+                reactionEmojiUrls = eventReactionEmojiUrls,
+                resolvedEmojis = resolvedEmojis,
+                unicodeEmojis = unicodeEmojis,
+                onOpenEmojiLibrary = onOpenEmojiLibrary,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
+        }
+    }
 }
 
 @Composable
@@ -1875,5 +2066,18 @@ fun BroadcastStatusBar(
                 }
             }
         }
+    }
+}
+
+private fun formatFeedArticleTimestamp(epoch: Long): String {
+    val now = System.currentTimeMillis() / 1000
+    val diff = now - epoch
+    return when {
+        diff < 60 -> "now"
+        diff < 3600 -> "${diff / 60}m"
+        diff < 86400 -> "${diff / 3600}h"
+        diff < 604800 -> "${diff / 86400}d"
+        else -> java.text.SimpleDateFormat("MMM d", java.util.Locale.US)
+            .format(java.util.Date(epoch * 1000))
     }
 }

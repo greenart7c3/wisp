@@ -243,7 +243,7 @@ class FeedSubscriptionManager(
                     return
                 }
                 Log.d("RLC", "[FeedSub] resubscribeFeed: ${allAuthors.size} authors, ${indexerRelays.size} indexers, ${excludedUrls.size} excluded")
-                val notesFilter = Filter(kinds = listOf(1, 6), since = sinceTimestamp)
+                val notesFilter = Filter(kinds = listOf(1, 6, 30023), since = sinceTimestamp)
                 outboxRouter.subscribeByAuthors(
                     feedSubId, allAuthors, notesFilter,
                     indexerRelays = indexerRelays, blockedUrls = excludedUrls
@@ -280,7 +280,7 @@ class FeedSubscriptionManager(
                         subManager.awaitEoseCount(prefetchSubId, prefetchTarget, timeoutMs = 5000)
                         subManager.closeSubscription(prefetchSubId)
                         Log.d("RLC", "[FeedSub] list relay-list prefetch done, now subscribing feed")
-                        val notesFilter = Filter(kinds = listOf(1, 6), since = listSince)
+                        val notesFilter = Filter(kinds = listOf(1, 6, 30023), since = listSince)
                         val targeted = outboxRouter.subscribeByAuthors(
                             feedSubId, authors, notesFilter,
                             indexerRelays = indexerRelays, blockedUrls = excludedUrls
@@ -301,7 +301,7 @@ class FeedSubscriptionManager(
                     return
                 }
 
-                val notesFilter = Filter(kinds = listOf(1, 6), since = listSince)
+                val notesFilter = Filter(kinds = listOf(1, 6, 30023), since = listSince)
                 outboxRouter.subscribeByAuthors(
                     feedSubId, authors, notesFilter,
                     indexerRelays = indexerRelays, blockedUrls = excludedUrls
@@ -353,7 +353,7 @@ class FeedSubscriptionManager(
                     listOfNotNull(pubkeyHex) + firstDegree
                 }
                 if (allAuthors.isEmpty()) { isLoadingMore = false; return }
-                val templateFilter = Filter(kinds = listOf(1, 6), until = oldest - 1, limit = 50)
+                val templateFilter = Filter(kinds = listOf(1, 6, 30023), until = oldest - 1, limit = 50)
                 outboxRouter.subscribeByAuthors(
                     "loadmore", allAuthors, templateFilter,
                     indexerRelays = indexerRelays, blockedUrls = excludedUrls
@@ -363,7 +363,7 @@ class FeedSubscriptionManager(
                 val oldest = eventRepo.getOldestRelayFeedTimestamp() ?: run { isLoadingMore = false; return }
                 val relaySet = _selectedRelaySet.value
                 if (relaySet != null) {
-                    val filter = Filter(kinds = listOf(1, 6), until = oldest - 1, limit = 50)
+                    val filter = Filter(kinds = listOf(1, 6, 30023), until = oldest - 1, limit = 50)
                     val msg = ClientMessage.req("relay-loadmore", filter)
                     for (setUrl in relaySet.relays) {
                         relayPool.sendToRelayOrEphemeral(setUrl, msg, skipBadCheck = true)
@@ -371,7 +371,7 @@ class FeedSubscriptionManager(
                 } else {
                     val url = _selectedRelay.value
                     if (url != null) {
-                        val filter = Filter(kinds = listOf(1, 6), until = oldest - 1, limit = 50)
+                        val filter = Filter(kinds = listOf(1, 6, 30023), until = oldest - 1, limit = 50)
                         relayPool.sendToRelayOrEphemeral(url, ClientMessage.req("relay-loadmore", filter), skipBadCheck = true)
                     } else { isLoadingMore = false; return }
                 }
@@ -390,7 +390,7 @@ class FeedSubscriptionManager(
                         val prefetchTarget = maxOf(2, (connected * 0.2).toInt())
                         subManager.awaitEoseCount(prefetchSubId, prefetchTarget, timeoutMs = 5000)
                         subManager.closeSubscription(prefetchSubId)
-                        val templateFilter = Filter(kinds = listOf(1, 6), until = oldest - 1)
+                        val templateFilter = Filter(kinds = listOf(1, 6, 30023), until = oldest - 1)
                         outboxRouter.subscribeByAuthors(
                             "loadmore", authors, templateFilter,
                             indexerRelays = indexerRelays, blockedUrls = excludedUrls
@@ -406,7 +406,7 @@ class FeedSubscriptionManager(
                     return
                 }
 
-                val templateFilter = Filter(kinds = listOf(1, 6), until = oldest - 1)
+                val templateFilter = Filter(kinds = listOf(1, 6, 30023), until = oldest - 1)
                 outboxRouter.subscribeByAuthors(
                     "loadmore", authors, templateFilter,
                     indexerRelays = indexerRelays, blockedUrls = excludedUrls
@@ -464,7 +464,7 @@ class FeedSubscriptionManager(
         if (relaySet != null) {
             relayStatusMonitorJob?.cancel()
             _relayFeedStatus.value = RelayFeedStatus.Subscribing
-            val filter = Filter(kinds = listOf(1, 6), limit = 100)
+            val filter = Filter(kinds = listOf(1, 6, 30023), limit = 100)
             val msg = ClientMessage.req(relayFeedSubId, filter)
             val sentUrls = mutableSetOf<String>()
             for (setUrl in relaySet.relays) {
@@ -491,7 +491,7 @@ class FeedSubscriptionManager(
             if (status is RelayFeedStatus.Cooldown || status is RelayFeedStatus.BadRelay) {
                 return
             }
-            val filter = Filter(kinds = listOf(1, 6), limit = 100)
+            val filter = Filter(kinds = listOf(1, 6, 30023), limit = 100)
             val msg = ClientMessage.req(relayFeedSubId, filter)
             val sent = relayPool.sendToRelayOrEphemeral(url, msg, skipBadCheck = true)
             if (!sent) {

@@ -185,6 +185,7 @@ fun WispNavHost(
             SigningMode.LOCAL -> {
                 authViewModel.keyRepo.getKeypair()?.let { LocalSigner(it.privkey, it.pubkey) }
             }
+            SigningMode.READ_ONLY -> null
             null -> null
         }
     }
@@ -460,6 +461,14 @@ fun WispNavHost(
                 onAuthenticated = { isNewAccount ->
                     if (isNewAccount) {
                         navController.navigate(Routes.ONBOARDING_PROFILE) {
+                            popUpTo(Routes.AUTH) { inclusive = true }
+                        }
+                    } else if (authViewModel.keyRepo.isReadOnly()) {
+                        feedViewModel.reloadForNewAccount()
+                        relayViewModel.reload()
+                        feedViewModel.initRelays()
+                        authViewModel.keyRepo.markOnboardingComplete()
+                        navController.navigate(Routes.LOADING) {
                             popUpTo(Routes.AUTH) { inclusive = true }
                         }
                     } else {
@@ -817,7 +826,10 @@ fun WispNavHost(
                 onAddNoteToList = { eventId -> addToListEventId = eventId },
                 onSendDm = if (!isOwnProfile) {{ navController.navigate("dm/$pubkey") }} else null,
                 signer = activeSigner,
-                translationRepo = feedViewModel.translationRepo
+                translationRepo = feedViewModel.translationRepo,
+                onArticleClick = { kind, articleAuthor, articleDTag ->
+                    navController.navigate("article/$kind/$articleAuthor/${java.net.URLEncoder.encode(articleDTag, "UTF-8")}")
+                }
             )
         }
 
@@ -1135,7 +1147,91 @@ fun WispNavHost(
             val articleViewModel: ArticleViewModel = viewModel()
             LaunchedEffect(kind, author, dTag) {
                 articleViewModel.loadArticle(kind, author, dTag, feedViewModel.eventRepo)
+                val articleEvent = feedViewModel.eventRepo.findAddressableEvent(kind, author, dTag)
+                articleViewModel.loadComments(
+                    author = author,
+                    dTag = dTag,
+                    articleEventId = articleEvent?.id,
+                    eventRepo = feedViewModel.eventRepo,
+                    relayPool = feedViewModel.relayPool,
+                    outboxRouter = feedViewModel.outboxRouter,
+                    subManager = feedViewModel.subManager,
+                    metadataFetcher = feedViewModel.metadataFetcher,
+                    topRelayUrls = feedViewModel.getScoredRelays().take(5).map { it.url },
+                    relayListRepo = feedViewModel.relayListRepo,
+                    relayHintStore = feedViewModel.relayHintStore
+                )
             }
+            var articleZapTarget by remember { mutableStateOf<com.wisp.app.nostr.NostrEvent?>(null) }
+            val articleZapInProgress by feedViewModel.zapInProgress.collectAsState()
+            var articleZapAnimatingIds by remember { mutableStateOf(emptySet<String>()) }
+            val isNwcConnected = feedViewModel.nwcRepo.hasConnection()
+            val articleSetListedIds by feedViewModel.bookmarkSetRepo.allListedEventIds.collectAsState()
+            val articleBookmarkedIds by feedViewModel.bookmarkRepo.bookmarkedIds.collectAsState()
+            val articleListedIds = remember(articleSetListedIds, articleBookmarkedIds) { articleSetListedIds + articleBookmarkedIds }
+            val articlePinnedIds by feedViewModel.pinRepo.pinnedIds.collectAsState()
+            val articleResolvedEmojis by feedViewModel.customEmojiRepo.resolvedEmojis.collectAsState()
+            val articleUnicodeEmojis by feedViewModel.customEmojiRepo.unicodeEmojis.collectAsState()
+            var showArticleEmojiLibrary by remember { mutableStateOf(false) }
+
+            LaunchedEffect(Unit) {
+                feedViewModel.zapSuccess.collect { eventId ->
+                    articleZapAnimatingIds = articleZapAnimatingIds + eventId
+                    kotlinx.coroutines.delay(1500)
+                    articleZapAnimatingIds = articleZapAnimatingIds - eventId
+                }
+            }
+
+            if (articleZapTarget != null) {
+                val zapRecipient = articleZapTarget!!.pubkey
+                ZapDialog(
+                    isWalletConnected = isNwcConnected,
+                    onDismiss = { articleZapTarget = null },
+                    onZap = { amountMsats, message, isAnonymous, isPrivate ->
+                        val event = articleZapTarget ?: return@ZapDialog
+                        articleZapTarget = null
+                        feedViewModel.sendZap(event, amountMsats, message, isAnonymous, isPrivate)
+                    },
+                    onGoToWallet = { navController.navigate(Routes.WALLET) },
+                    canPrivateZap = feedViewModel.relayPool.hasDmRelays() && feedViewModel.relayListRepo.hasDmRelays(zapRecipient)
+                )
+            }
+
+            val articleNoteActions = remember {
+                com.wisp.app.ui.component.NoteActions(
+                    onReply = { event ->
+                        replyTarget = event
+                        quoteTarget = null
+                        composeViewModel.clear()
+                        navController.navigate(Routes.COMPOSE)
+                    },
+                    onReact = { event, emoji -> feedViewModel.toggleReaction(event, emoji) },
+                    onRepost = { event -> feedViewModel.sendRepost(event) },
+                    onQuote = { event ->
+                        quoteTarget = event
+                        replyTarget = null
+                        composeViewModel.clear()
+                        navController.navigate(Routes.COMPOSE)
+                    },
+                    onZap = { event -> articleZapTarget = event },
+                    onProfileClick = { pubkey -> navController.navigate("profile/$pubkey") },
+                    onNoteClick = { eventId -> navController.navigate("thread/$eventId") },
+                    onAddToList = { eventId -> addToListEventId = eventId },
+                    onFollowAuthor = { pubkey -> feedViewModel.toggleFollow(pubkey) },
+                    onBlockAuthor = { pubkey -> feedViewModel.blockUser(pubkey) },
+                    onPin = { eventId -> feedViewModel.togglePin(eventId) },
+                    isFollowing = { pubkey -> feedViewModel.contactRepo.isFollowing(pubkey) },
+                    userPubkey = feedViewModel.getUserPubkey(),
+                    nip05Repo = feedViewModel.nip05Repo,
+                    onHashtagClick = { tag ->
+                        navController.navigate("hashtag/${java.net.URLEncoder.encode(tag, "UTF-8")}")
+                    },
+                    onArticleClick = { k, a, d ->
+                        navController.navigate("article/$k/$a/${java.net.URLEncoder.encode(d, "UTF-8")}")
+                    }
+                )
+            }
+
             ArticleScreen(
                 viewModel = articleViewModel,
                 eventRepo = feedViewModel.eventRepo,
@@ -1143,8 +1239,43 @@ fun WispNavHost(
                 onProfileClick = { pubkey -> navController.navigate("profile/$pubkey") },
                 onHashtagClick = { tag ->
                     navController.navigate("hashtag/${java.net.URLEncoder.encode(tag, "UTF-8")}")
-                }
+                },
+                onReply = { event ->
+                    replyTarget = event
+                    quoteTarget = null
+                    composeViewModel.clear()
+                    navController.navigate(Routes.COMPOSE)
+                },
+                onReact = { event, emoji -> feedViewModel.toggleReaction(event, emoji) },
+                onRepost = { event -> feedViewModel.sendRepost(event) },
+                onQuote = { event ->
+                    quoteTarget = event
+                    replyTarget = null
+                    composeViewModel.clear()
+                    navController.navigate(Routes.COMPOSE)
+                },
+                onZap = { event -> articleZapTarget = event },
+                onAddToList = { eventId -> addToListEventId = eventId },
+                noteActions = articleNoteActions,
+                zapAnimatingIds = articleZapAnimatingIds,
+                zapInProgressIds = articleZapInProgress,
+                listedIds = articleListedIds,
+                pinnedIds = articlePinnedIds,
+                userPubkey = feedViewModel.getUserPubkey(),
+                resolvedEmojis = articleResolvedEmojis,
+                unicodeEmojis = articleUnicodeEmojis,
+                onOpenEmojiLibrary = { showArticleEmojiLibrary = true }
             )
+
+            if (showArticleEmojiLibrary) {
+                com.wisp.app.ui.component.EmojiLibrarySheet(
+                    currentEmojis = articleUnicodeEmojis,
+                    onAddEmojis = { emojis ->
+                        emojis.forEach { feedViewModel.customEmojiRepo.addUnicodeEmoji(it) }
+                    },
+                    onDismiss = { showArticleEmojiLibrary = false }
+                )
+            }
         }
 
         composable(Routes.SAFETY) {

@@ -342,7 +342,7 @@ class EventRouter(
                 eventRepo.addRelayFeedEvent(event)
                 onRelayFeedEventReceived()
                 eventRepo.addEventRelay(event.id, relayUrl)
-                if (event.kind == 1) {
+                if (event.kind == 1 || event.kind == 30023) {
                     metadataFetcher.fetchQuotedEvents(event)
                     if (eventRepo.getProfileData(event.pubkey) == null) {
                         metadataFetcher.addToPendingProfiles(event.pubkey)
@@ -360,7 +360,7 @@ class EventRouter(
             } else if (isFeedSub) {
                 eventRepo.addEvent(event)
                 eventRepo.addEventRelay(event.id, relayUrl)
-                if (event.kind == 1) {
+                if (event.kind == 1 || event.kind == 30023) {
                     metadataFetcher.fetchQuotedEvents(event)
                     if (eventRepo.getProfileData(event.pubkey) == null) {
                         metadataFetcher.addToPendingProfiles(event.pubkey)

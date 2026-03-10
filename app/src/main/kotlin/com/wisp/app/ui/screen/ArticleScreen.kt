@@ -52,7 +52,12 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.wisp.app.repo.EventRepository
 import com.wisp.app.ui.component.ProfilePicture
+import com.wisp.app.nostr.NostrEvent
+import com.wisp.app.ui.component.ActionBar
+import com.wisp.app.ui.component.NoteActions
+import com.wisp.app.ui.component.PostCard
 import com.wisp.app.viewmodel.ArticleViewModel
+import kotlin.math.min
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -61,7 +66,22 @@ fun ArticleScreen(
     eventRepo: EventRepository,
     onBack: () -> Unit,
     onProfileClick: (String) -> Unit = {},
-    onHashtagClick: ((String) -> Unit)? = null
+    onHashtagClick: ((String) -> Unit)? = null,
+    onReply: (NostrEvent) -> Unit = {},
+    onReact: (NostrEvent, String) -> Unit = { _, _ -> },
+    onRepost: (NostrEvent) -> Unit = {},
+    onQuote: (NostrEvent) -> Unit = {},
+    onZap: (NostrEvent) -> Unit = {},
+    onAddToList: (String) -> Unit = {},
+    noteActions: NoteActions? = null,
+    zapAnimatingIds: Set<String> = emptySet(),
+    zapInProgressIds: Set<String> = emptySet(),
+    listedIds: Set<String> = emptySet(),
+    pinnedIds: Set<String> = emptySet(),
+    userPubkey: String? = null,
+    resolvedEmojis: Map<String, String> = emptyMap(),
+    unicodeEmojis: List<String> = emptyList(),
+    onOpenEmojiLibrary: (() -> Unit)? = null
 ) {
     val article by viewModel.article.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
@@ -69,9 +89,17 @@ fun ArticleScreen(
     val coverImage by viewModel.coverImage.collectAsState()
     val publishedAt by viewModel.publishedAt.collectAsState()
     val hashtags by viewModel.hashtags.collectAsState()
+    val comments by viewModel.comments.collectAsState()
+    val isCommentsLoading by viewModel.isCommentsLoading.collectAsState()
+
+    val reactionVersion by eventRepo.reactionVersion.collectAsState()
+    val replyCountVersion by eventRepo.replyCountVersion.collectAsState()
+    val zapVersion by eventRepo.zapVersion.collectAsState()
+    val repostVersion by eventRepo.repostVersion.collectAsState()
+    val profileVersion by eventRepo.profileVersion.collectAsState()
 
     val authorPubkey = article?.pubkey
-    val profile = remember(authorPubkey) { authorPubkey?.let { eventRepo.getProfileData(it) } }
+    val profile = remember(authorPubkey, profileVersion) { authorPubkey?.let { eventRepo.getProfileData(it) } }
 
     val blocks = remember(article) {
         article?.content?.let { parseMarkdownBlocks(it) } ?: emptyList()
@@ -205,6 +233,132 @@ fun ArticleScreen(
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
                             )
                         }
+                    }
+
+                    // Article action bar
+                    if (article != null) {
+                        item(key = "action-bar") {
+                            val articleEvent = article!!
+                            val likeCount = remember(reactionVersion, articleEvent.id) { eventRepo.getReactionCount(articleEvent.id) }
+                            // Use comment list size for consistency with the comments section below
+                            val replyCount = comments.size
+                            val zapSats = remember(zapVersion, articleEvent.id) { eventRepo.getZapSats(articleEvent.id) }
+                            val userEmojis = remember(reactionVersion, articleEvent.id, userPubkey) {
+                                userPubkey?.let { eventRepo.getUserReactionEmojis(articleEvent.id, it) } ?: emptySet()
+                            }
+                            val repostCount = remember(repostVersion, articleEvent.id) { eventRepo.getRepostCount(articleEvent.id) }
+                            val hasUserReposted = remember(repostVersion, articleEvent.id) { eventRepo.hasUserReposted(articleEvent.id) }
+                            val hasUserZapped = remember(zapVersion, articleEvent.id) { eventRepo.hasUserZapped(articleEvent.id) }
+                            val eventReactionEmojiUrls = remember(reactionVersion, articleEvent.id) { eventRepo.getReactionEmojiUrls(articleEvent.id) }
+
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                            ActionBar(
+                                onReply = { onReply(articleEvent) },
+                                onReact = { emoji -> onReact(articleEvent, emoji) },
+                                userReactionEmojis = userEmojis,
+                                onRepost = { onRepost(articleEvent) },
+                                onQuote = { onQuote(articleEvent) },
+                                hasUserReposted = hasUserReposted,
+                                onZap = { onZap(articleEvent) },
+                                hasUserZapped = hasUserZapped,
+                                onAddToList = { onAddToList(articleEvent.id) },
+                                isInList = articleEvent.id in listedIds,
+                                likeCount = likeCount,
+                                repostCount = repostCount,
+                                replyCount = replyCount,
+                                zapSats = zapSats,
+                                isZapAnimating = articleEvent.id in zapAnimatingIds,
+                                isZapInProgress = articleEvent.id in zapInProgressIds,
+                                reactionEmojiUrls = eventReactionEmojiUrls,
+                                resolvedEmojis = resolvedEmojis,
+                                unicodeEmojis = unicodeEmojis,
+                                onOpenEmojiLibrary = onOpenEmojiLibrary,
+                                modifier = Modifier.padding(horizontal = 8.dp)
+                            )
+                        }
+                    }
+
+                    // Comments header
+                    item(key = "comments-header") {
+                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = "Comments",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            if (comments.isNotEmpty()) {
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "(${comments.size})",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        if (isCommentsLoading && comments.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(8.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Comment items
+                    items(comments.size, key = { "comment-${comments[it].first.id}" }) { index ->
+                        val (event, depth) = comments[index]
+                        val commentProfile = remember(profileVersion, event.pubkey) { eventRepo.getProfileData(event.pubkey) }
+                        val commentLikeCount = remember(reactionVersion, event.id) { eventRepo.getReactionCount(event.id) }
+                        val commentReplyCount = remember(replyCountVersion, event.id) { eventRepo.getReplyCount(event.id) }
+                        val commentZapSats = remember(zapVersion, event.id) { eventRepo.getZapSats(event.id) }
+                        val commentUserEmojis = remember(reactionVersion, event.id, userPubkey) {
+                            userPubkey?.let { eventRepo.getUserReactionEmojis(event.id, it) } ?: emptySet()
+                        }
+                        val commentRepostCount = remember(repostVersion, event.id) { eventRepo.getRepostCount(event.id) }
+                        val commentHasUserReposted = remember(repostVersion, event.id) { eventRepo.hasUserReposted(event.id) }
+                        val commentHasUserZapped = remember(zapVersion, event.id) { eventRepo.hasUserZapped(event.id) }
+                        val commentReactionEmojiUrls = remember(reactionVersion, event.id) { eventRepo.getReactionEmojiUrls(event.id) }
+                        PostCard(
+                            event = event,
+                            profile = commentProfile,
+                            onReply = { onReply(event) },
+                            onProfileClick = { onProfileClick(event.pubkey) },
+                            onNavigateToProfile = onProfileClick,
+                            onNoteClick = {},
+                            onReact = { emoji -> onReact(event, emoji) },
+                            userReactionEmojis = commentUserEmojis,
+                            onRepost = { onRepost(event) },
+                            onQuote = { onQuote(event) },
+                            hasUserReposted = commentHasUserReposted,
+                            repostCount = commentRepostCount,
+                            onZap = { onZap(event) },
+                            hasUserZapped = commentHasUserZapped,
+                            likeCount = commentLikeCount,
+                            replyCount = commentReplyCount,
+                            zapSats = commentZapSats,
+                            isZapAnimating = event.id in zapAnimatingIds,
+                            isZapInProgress = event.id in zapInProgressIds,
+                            eventRepo = eventRepo,
+                            reactionEmojiUrls = commentReactionEmojiUrls,
+                            resolvedEmojis = resolvedEmojis,
+                            unicodeEmojis = unicodeEmojis,
+                            onOpenEmojiLibrary = onOpenEmojiLibrary,
+                            isOwnEvent = event.pubkey == userPubkey,
+                            onAddToList = { onAddToList(event.id) },
+                            isInList = event.id in listedIds,
+                            noteActions = noteActions,
+                            modifier = Modifier.padding(start = (min(depth, 4) * 24).dp)
+                        )
                     }
 
                     item(key = "footer") { Spacer(Modifier.height(32.dp)) }
