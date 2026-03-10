@@ -1059,7 +1059,8 @@ private fun TransactionRow(tx: Nip47.Transaction) {
         // Description + time
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                tx.description?.takeIf { it.isNotBlank() } ?: if (isIncoming) "Received" else "Sent",
+                tx.description?.takeIf { it.isNotBlank() && it != "null" }
+                    ?: if (isIncoming) "⚡ Zap!" else "Sent",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
