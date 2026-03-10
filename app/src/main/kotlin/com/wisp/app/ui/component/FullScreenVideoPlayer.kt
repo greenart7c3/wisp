@@ -41,6 +41,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.wisp.app.R
+import com.wisp.app.relay.HttpClientFactory
 import com.wisp.app.util.MediaDownloader
 import kotlinx.coroutines.launch
 
@@ -60,7 +61,7 @@ fun FullScreenVideoPlayer(
         val scope = rememberCoroutineScope()
 
         val exoPlayer = remember(videoUrl) {
-            ExoPlayer.Builder(context).build().apply {
+            HttpClientFactory.createExoPlayer(context).apply {
                 setMediaItem(MediaItem.fromUri(Uri.parse(videoUrl)))
                 prepare()
                 seekTo(startPositionMs)

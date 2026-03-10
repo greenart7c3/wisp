@@ -1,5 +1,9 @@
 package com.wisp.app.relay
 
+import android.content.Context
+import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import okhttp3.Dispatcher
 import okhttp3.Dns
 import okhttp3.OkHttpClient
@@ -68,6 +72,14 @@ object HttpClientFactory {
             imageClient = it
             imageClientBuiltWithTor = torNow
         }
+    }
+
+    fun createExoPlayer(context: Context): ExoPlayer {
+        val client = createHttpClient(connectTimeoutSeconds = 10, readTimeoutSeconds = 30)
+        val dataSourceFactory = OkHttpDataSource.Factory(client)
+        return ExoPlayer.Builder(context)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .build()
     }
 
     fun createHttpClient(

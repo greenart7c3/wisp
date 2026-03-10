@@ -63,6 +63,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import com.wisp.app.relay.HttpClientFactory
 import androidx.media3.ui.PlayerView
 import coil3.compose.AsyncImage
 import com.wisp.app.R
@@ -1112,7 +1113,7 @@ private fun ImageWithContextMenu(url: String, onFullScreen: () -> Unit) {
 private fun InlineVideoPlayerWithFullscreen(url: String, onFullScreen: (positionMs: Long) -> Unit) {
     val context = LocalContext.current
     val exoPlayer = remember(url) {
-        ExoPlayer.Builder(context).build().apply {
+        HttpClientFactory.createExoPlayer(context).apply {
             setMediaItem(MediaItem.fromUri(Uri.parse(url)))
             prepare()
             playWhenReady = false
@@ -1167,7 +1168,7 @@ private fun InlineVideoPlayerWithFullscreen(url: String, onFullScreen: (position
 private fun InlineVideoPlayer(url: String, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val exoPlayer = remember(url) {
-        ExoPlayer.Builder(context).build().apply {
+        HttpClientFactory.createExoPlayer(context).apply {
             setMediaItem(MediaItem.fromUri(Uri.parse(url)))
             prepare()
             playWhenReady = false
