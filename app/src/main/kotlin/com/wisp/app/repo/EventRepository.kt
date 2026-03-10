@@ -240,13 +240,21 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
                         repostDirty = true
                         markVersionDirty()
                         val isReply = inner.tags.any { it.size >= 2 && it[0] == "e" }
+                        // Only bump feed sort time if the reposter is a followed author.
+                        // Engagement subscriptions bring in reposts from anyone — non-followed
+                        // reposters should update counts but not re-sort the feed.
+                        val filter = _authorFilter.value
+                        val reposterIsFollowed = filter == null || event.pubkey in filter
                         if (seenEventIds.add(inner.id)) {
                             eventCache.put(inner.id, inner)
                             if (!isReply) {
-                                feedSortTime.put(inner.id, event.created_at)
-                                binaryInsert(inner, sortTime = event.created_at, fromFeed = true)
+                                if (reposterIsFollowed) {
+                                    feedSortTime.put(inner.id, event.created_at)
+                                }
+                                val sortTime = if (reposterIsFollowed) event.created_at else inner.created_at
+                                binaryInsert(inner, sortTime = sortTime, fromFeed = true)
                             }
-                        } else if (!isReply) {
+                        } else if (!isReply && reposterIsFollowed) {
                             // Already seen — update sort time if repost is newer so it surfaces to top
                             val prevTime = feedSortTime.get(inner.id) ?: inner.created_at
                             if (event.created_at > prevTime) {
