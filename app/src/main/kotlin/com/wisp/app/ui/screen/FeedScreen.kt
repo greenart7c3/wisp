@@ -157,19 +157,19 @@ fun FeedScreen(
     // Jump to top only when feed type, selected list, or selected relay actually changes
     // (not on recomposition after back-navigation from thread/compose)
     var prevFeedType by rememberSaveable { mutableStateOf(feedType.name) }
-    var prevSelectedList by rememberSaveable { mutableStateOf(selectedList) }
+    var prevSelectedListId by rememberSaveable { mutableStateOf(selectedList?.dTag) }
     var prevSelectedRelay by rememberSaveable { mutableStateOf(selectedRelay) }
     var prevSelectedRelaySet by rememberSaveable { mutableStateOf(selectedRelaySet?.name) }
 
     LaunchedEffect(feedType, selectedList, selectedRelay, selectedRelaySet) {
         val feedTypeChanged = feedType.name != prevFeedType
-        val listChanged = selectedList != prevSelectedList
+        val listChanged = selectedList?.dTag != prevSelectedListId
         val relayChanged = selectedRelay != prevSelectedRelay
         val relaySetChanged = selectedRelaySet?.name != prevSelectedRelaySet
 
         if (feedTypeChanged || listChanged || relayChanged || relaySetChanged) {
             prevFeedType = feedType.name
-            prevSelectedList = selectedList
+            prevSelectedListId = selectedList?.dTag
             prevSelectedRelay = selectedRelay
             prevSelectedRelaySet = selectedRelaySet?.name
             listState.scrollToItem(0)
