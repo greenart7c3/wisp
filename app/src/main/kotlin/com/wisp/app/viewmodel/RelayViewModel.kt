@@ -107,6 +107,13 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
         keyRepo.saveRelays(updated)
     }
 
+    fun toggleAuth(url: String) {
+        val updated = relays.value.map {
+            if (it.url == url) it.copy(auth = !it.auth) else it
+        }
+        keyRepo.saveRelays(updated)
+    }
+
     fun publishRelayList(relayPool: RelayPool, signer: NostrSigner? = null): Boolean {
         val s = signer ?: keyRepo.getKeypair()?.let { LocalSigner(it.privkey, it.pubkey) } ?: return false
         return try {

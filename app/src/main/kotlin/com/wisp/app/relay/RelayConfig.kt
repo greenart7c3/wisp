@@ -13,7 +13,8 @@ enum class RelaySetType(val displayName: String, val eventKind: Int) {
 data class RelayConfig(
     val url: String,
     val read: Boolean = true,
-    val write: Boolean = true
+    val write: Boolean = true,
+    val auth: Boolean = true
 ) {
     companion object {
         val DEFAULTS = listOf(

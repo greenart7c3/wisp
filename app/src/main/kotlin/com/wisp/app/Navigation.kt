@@ -45,6 +45,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import com.wisp.app.ui.component.NotifBlipSound
 import com.wisp.app.ui.component.WispBottomBar
 import com.wisp.app.ui.component.ZapDialog
+import com.wisp.app.ui.component.AuthApprovalDialog
 import com.wisp.app.ui.screen.BlossomServersScreen
 import com.wisp.app.ui.screen.AuthScreen
 import com.wisp.app.ui.screen.ComposeScreen
@@ -414,6 +415,16 @@ fun WispNavHost(
             onRemoveFromSet = { dTag, eventId -> feedViewModel.removeNoteFromBookmarkSet(dTag, eventId) },
             onCreateSet = { name -> feedViewModel.createBookmarkSet(name) },
             onDismiss = { addToListEventId = null }
+        )
+    }
+
+    // NIP-42 AUTH approval dialog — shown when a DM delivery relay requests authentication
+    val pendingAuth by feedViewModel.relayPool.pendingAuthRequest.collectAsState()
+    pendingAuth?.let { request ->
+        AuthApprovalDialog(
+            relayUrl = request.relayUrl,
+            onAllow = { feedViewModel.relayPool.approveAuth(request) },
+            onDeny = { feedViewModel.relayPool.denyAuth(request) }
         )
     }
 
