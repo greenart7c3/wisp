@@ -89,12 +89,22 @@ import com.wisp.app.nostr.NostrUriData
 import com.wisp.app.repo.EventRepository
 import com.wisp.app.repo.Nip05Repository
 import com.wisp.app.util.MediaDownloader
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.PlayArrow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import org.json.JSONObject
 import java.net.URLEncoder
+
+data class MediaSettings(
+    val autoLoadMedia: Boolean = true,
+    val videoAutoPlay: Boolean = true
+)
+
+val LocalMediaSettings = compositionLocalOf { MediaSettings() }
 
 /**
  * Bundles event-generic action callbacks so quoted notes can render
@@ -1085,10 +1095,43 @@ private fun formatQuotedTimestamp(epoch: Long): String {
 @kotlin.OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ImageWithContextMenu(url: String, onFullScreen: () -> Unit) {
+    val autoLoad = LocalMediaSettings.current.autoLoadMedia
+    var loaded by remember { mutableStateOf(autoLoad) }
     var showMenu by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
+
+    if (!loaded) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(200.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { loaded = true },
+            color = MaterialTheme.colorScheme.surfaceVariant
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Image,
+                    contentDescription = "Load image",
+                    modifier = Modifier.size(40.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Tap to load",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
 
     Box {
         AsyncImage(
@@ -1128,6 +1171,40 @@ private fun ImageWithContextMenu(url: String, onFullScreen: () -> Unit) {
 @OptIn(UnstableApi::class)
 @Composable
 private fun InlineVideoPlayerWithFullscreen(url: String, onFullScreen: (positionMs: Long) -> Unit) {
+    val mediaSettings = LocalMediaSettings.current
+    var loaded by remember { mutableStateOf(mediaSettings.autoLoadMedia) }
+
+    if (!loaded) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(200.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { loaded = true },
+            color = MaterialTheme.colorScheme.surfaceVariant
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = "Load video",
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Tap to load",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
+
     val context = LocalContext.current
     val view = LocalView.current
     var videoAspectRatio by remember { mutableFloatStateOf(16f / 9f) }
@@ -1181,7 +1258,7 @@ private fun InlineVideoPlayerWithFullscreen(url: String, onFullScreen: (position
                 val totalHeight = bounds.height
                 val visibleFraction = if (totalHeight > 0) visibleHeight / totalHeight else 0f
                 if (visibleFraction > 0.5f) {
-                    if (!exoPlayer.isPlaying && !userPaused) exoPlayer.play()
+                    if (mediaSettings.videoAutoPlay && !exoPlayer.isPlaying && !userPaused) exoPlayer.play()
                 } else {
                     if (exoPlayer.isPlaying) exoPlayer.pause()
                     userPaused = false
@@ -1256,6 +1333,40 @@ private fun InlineVideoPlayerWithFullscreen(url: String, onFullScreen: (position
 @OptIn(UnstableApi::class)
 @Composable
 private fun InlineVideoPlayer(url: String, modifier: Modifier = Modifier) {
+    val mediaSettings = LocalMediaSettings.current
+    var loaded by remember { mutableStateOf(mediaSettings.autoLoadMedia) }
+
+    if (!loaded) {
+        Surface(
+            modifier = modifier
+                .heightIn(max = 500.dp)
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { loaded = true },
+            color = MaterialTheme.colorScheme.surfaceVariant
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = "Load video",
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Tap to load",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
+
     val context = LocalContext.current
     val view = LocalView.current
     var videoAspectRatio by remember { mutableFloatStateOf(16f / 9f) }
@@ -1308,7 +1419,7 @@ private fun InlineVideoPlayer(url: String, modifier: Modifier = Modifier) {
                 val totalHeight = bounds.height
                 val visibleFraction = if (totalHeight > 0) visibleHeight / totalHeight else 0f
                 if (visibleFraction > 0.5f) {
-                    if (!exoPlayer.isPlaying && !userPaused) exoPlayer.play()
+                    if (mediaSettings.videoAutoPlay && !exoPlayer.isPlaying && !userPaused) exoPlayer.play()
                 } else {
                     if (exoPlayer.isPlaying) exoPlayer.pause()
                     userPaused = false
