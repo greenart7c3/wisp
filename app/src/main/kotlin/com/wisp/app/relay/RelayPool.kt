@@ -39,6 +39,46 @@ class RelayPool {
     private var blockedUrls = emptySet<String>()
     fun getBlockedUrls(): Set<String> = blockedUrls
 
+    /** URLs tagged as recipient DM delivery relays (tier 2 for AUTH). */
+    private val dmDeliveryTargets: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** Mark a relay URL as a DM delivery target (tier 2 AUTH). */
+    fun markDmDeliveryTarget(url: String) { dmDeliveryTargets.add(url) }
+
+    /** Session-scoped set of relay URLs the user has approved for AUTH. */
+    private val userApprovedAuthRelays: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    data class PendingAuthRequest(val relayUrl: String, val challenge: String)
+
+    private val _pendingAuthRequest = MutableStateFlow<PendingAuthRequest?>(null)
+    /** Emitted when a tier-2 (DM delivery) relay needs user approval to authenticate. */
+    val pendingAuthRequest: StateFlow<PendingAuthRequest?> = _pendingAuthRequest
+
+    /** Approve a pending AUTH request — signs and sends AUTH, remembers for session. */
+    fun approveAuth(request: PendingAuthRequest) {
+        userApprovedAuthRelays.add(request.relayUrl)
+        _pendingAuthRequest.value = null
+        scope.launch {
+            val signer = authSigner ?: return@launch
+            try {
+                val relay = relayIndex[request.relayUrl] ?: return@launch
+                val authEvent = signer(request.relayUrl, request.challenge)
+                relay.send(ClientMessage.auth(authEvent))
+                authenticatedRelays.add(request.relayUrl)
+                Log.d("RelayPool", "AUTH approved and sent to ${request.relayUrl}")
+                _authCompleted.tryEmit(request.relayUrl)
+            } catch (e: Exception) {
+                Log.e("RelayPool", "AUTH failed after approval for ${request.relayUrl}: ${e.message}")
+            }
+        }
+    }
+
+    /** Deny a pending AUTH request. */
+    fun denyAuth(request: PendingAuthRequest) {
+        _pendingAuthRequest.value = null
+        Log.d("RelayPool", "AUTH denied for ${request.relayUrl}")
+    }
+
     /**
      * Ensure the OkHttpClient matches the current Tor state.
      * If Tor was enabled/disabled since the client was built, rebuild it.
@@ -383,16 +423,48 @@ class RelayPool {
         scope.launch(parentJob) {
             relay.authChallenges.collect { challenge ->
                 val signer = authSigner ?: return@collect
-                try {
-                    val authEvent = signer(relay.config.url, challenge)
-                    val msg = ClientMessage.auth(authEvent)
-                    relay.send(msg)
-                    authenticatedRelays.add(relay.config.url)
-                    Log.d("RelayPool", "AUTH response sent to ${relay.config.url}")
-                    _authCompleted.tryEmit(relay.config.url)
-                } catch (e: Exception) {
-                    Log.e("RelayPool", "AUTH failed for ${relay.config.url}: ${e.message}")
+                val url = relay.config.url
+                val dmRelayUrls = dmRelays.map { it.config.url }.toSet()
+
+                // Tier 1: User's own relays — auto-sign silently (if auth enabled on config)
+                if (url in pinnedRelayUrls || url in dmRelayUrls) {
+                    if (!relay.config.auth) {
+                        Log.d("RelayPool", "AUTH challenge discarded — auth disabled for relay $url")
+                        return@collect
+                    }
+                    try {
+                        val authEvent = signer(url, challenge)
+                        relay.send(ClientMessage.auth(authEvent))
+                        authenticatedRelays.add(url)
+                        Log.d("RelayPool", "AUTH auto-signed for trusted relay $url")
+                        _authCompleted.tryEmit(url)
+                    } catch (e: Exception) {
+                        Log.e("RelayPool", "AUTH failed for trusted relay $url: ${e.message}")
+                    }
+                    return@collect
                 }
+
+                // Tier 2: Recipient DM delivery relays — prompt user (or auto-sign if already approved)
+                if (url in dmDeliveryTargets) {
+                    if (url in userApprovedAuthRelays) {
+                        try {
+                            val authEvent = signer(url, challenge)
+                            relay.send(ClientMessage.auth(authEvent))
+                            authenticatedRelays.add(url)
+                            Log.d("RelayPool", "AUTH auto-signed for approved DM delivery relay $url")
+                            _authCompleted.tryEmit(url)
+                        } catch (e: Exception) {
+                            Log.e("RelayPool", "AUTH failed for approved DM delivery relay $url: ${e.message}")
+                        }
+                    } else {
+                        Log.d("RelayPool", "AUTH challenge from DM delivery relay $url — prompting user")
+                        _pendingAuthRequest.value = PendingAuthRequest(url, challenge)
+                    }
+                    return@collect
+                }
+
+                // Tier 3: Everything else — silently discard
+                Log.d("RelayPool", "AUTH challenge discarded from untrusted relay $url")
             }
         }
     }

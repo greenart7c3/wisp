@@ -168,6 +168,11 @@ private fun GeneralRelayList(relays: List<RelayConfig>, viewModel: RelayViewMode
                             onClick = { viewModel.toggleWrite(relay.url) },
                             label = { Text("write") }
                         )
+                        FilterChip(
+                            selected = relay.auth,
+                            onClick = { viewModel.toggleAuth(relay.url) },
+                            label = { Text("auth") }
+                        )
                     }
                 }
                 IconButton(onClick = { viewModel.removeRelay(relay.url) }) {

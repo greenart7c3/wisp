@@ -351,6 +351,10 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
         deliveryRelays: List<String>,
         message: String
     ): Set<String> {
+        // Tag each delivery relay so RelayPool knows it's tier 2 for AUTH
+        for (url in deliveryRelays) {
+            relayPool.markDmDeliveryTarget(url)
+        }
         val sentRelayUrls = mutableSetOf<String>()
         for (url in deliveryRelays) {
             try {
