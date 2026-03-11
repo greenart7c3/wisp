@@ -26,6 +26,7 @@ import com.wisp.app.repo.KeyRepository
 import com.wisp.app.repo.MentionCandidate
 import com.wisp.app.repo.MentionSearchRepository
 import com.wisp.app.repo.EventRepository
+import com.wisp.app.repo.InterfacePreferences
 import com.wisp.app.repo.ProfileRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -40,6 +41,7 @@ private val BARE_BECH32_REGEX = Regex("(?<!nostr:)(?<![a-z0-9])((note1|nevent1|n
 
 class ComposeViewModel(app: Application, private val savedStateHandle: SavedStateHandle) : AndroidViewModel(app) {
     private val keyRepo = KeyRepository(app)
+    private val interfacePrefs = InterfacePreferences(app)
     val blossomRepo = BlossomRepository(app, keyRepo.getPubkeyHex())
 
     fun reloadBlossomRepo() {
@@ -359,6 +361,10 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             Nip18.appendNoteUri(content, quoteTo.id, relayHints, quoteTo.pubkey)
         } else {
             content
+        }
+
+        if (interfacePrefs.isClientTagEnabled()) {
+            tags.add(listOf("client", "Wisp"))
         }
 
         // Hand off to PowManager for background mining if PoW enabled

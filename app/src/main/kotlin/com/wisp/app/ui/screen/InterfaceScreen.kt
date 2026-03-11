@@ -65,6 +65,7 @@ fun InterfaceScreen(
 ) {
     var isLargeText by remember { mutableStateOf(interfacePrefs.isLargeText()) }
     var newNotesHidden by remember { mutableStateOf(interfacePrefs.isNewNotesButtonHidden()) }
+    var clientTagEnabled by remember { mutableStateOf(interfacePrefs.isClientTagEnabled()) }
     var selectedTheme by remember { mutableStateOf(interfacePrefs.getTheme()) }
     var isCustomTheme by remember { mutableStateOf(selectedTheme == "custom") }
 
@@ -274,6 +275,36 @@ fun InterfaceScreen(
                         newNotesHidden = it
                         interfacePrefs.setNewNotesButtonHidden(it)
                         onChanged()
+                    }
+                )
+            }
+
+            Spacer(Modifier.height(24.dp))
+
+            // Client Tag section
+            Text(
+                text = "Client Tag",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Tag notes with Wisp", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Include a tag identifying Wisp as the client. This is visible to others.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = clientTagEnabled,
+                    onCheckedChange = {
+                        clientTagEnabled = it
+                        interfacePrefs.setClientTagEnabled(it)
                     }
                 )
             }

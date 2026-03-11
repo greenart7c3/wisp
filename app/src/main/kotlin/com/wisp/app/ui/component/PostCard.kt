@@ -147,6 +147,10 @@ fun PostCard(
     }
     var contentRevealed by remember { mutableStateOf(false) }
 
+    val clientName = remember(event.id) {
+        event.tags.firstOrNull { it.size >= 2 && it[0] == "client" }?.get(1)
+    }
+
     val hasReactionDetails = reactionDetails.isNotEmpty() || zapDetails.isNotEmpty() || repostDetails.isNotEmpty()
     var expandedDetails by remember { mutableStateOf(false) }
     var showTranslation by remember { mutableStateOf(true) }
@@ -684,6 +688,9 @@ fun PostCard(
                 }
                 if (displayIcons.isNotEmpty()) {
                     SeenOnSection(relayIcons = displayIcons, onRelayClick = onRelayClick)
+                }
+                if (clientName != null) {
+                    ClientTagSection(clientName = clientName)
                 }
             }
         }

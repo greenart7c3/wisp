@@ -16,4 +16,7 @@ class InterfacePreferences(context: Context) {
 
     fun getTheme(): String = prefs.getString("theme", "custom") ?: "custom"
     fun setTheme(theme: String) = prefs.edit().putString("theme", theme).apply()
+
+    fun isClientTagEnabled(): Boolean = prefs.getBoolean("client_tag_enabled", true)
+    fun setClientTagEnabled(enabled: Boolean) = prefs.edit().putBoolean("client_tag_enabled", enabled).apply()
 }

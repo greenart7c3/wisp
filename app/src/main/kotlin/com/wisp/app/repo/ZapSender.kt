@@ -11,7 +11,8 @@ class ZapSender(
     private val nwcRepo: NwcRepository,
     private val relayPool: RelayPool,
     private val relayListRepo: RelayListRepository,
-    private val httpClient: OkHttpClient
+    private val httpClient: OkHttpClient,
+    private val interfacePrefs: InterfacePreferences
 ) {
     var signer: NostrSigner? = null
 
@@ -55,6 +56,12 @@ class ZapSender(
                 .ifEmpty { relayPool.getRelayUrls().take(3) }
         }
 
+        val extraTags = if (interfacePrefs.isClientTagEnabled()) {
+            listOf(listOf("client", "Wisp"))
+        } else {
+            emptyList()
+        }
+
         val zapRequest = if (isAnonymous) {
             val throwaway = Keys.generate()
             Nip57.buildZapRequest(
@@ -65,7 +72,8 @@ class ZapSender(
                 amountMsats = amountMsats,
                 relayUrls = relayUrls,
                 lnurl = recipientLud16,
-                message = message
+                message = message,
+                extraTags = extraTags
             )
         } else {
             val s = signer
@@ -79,7 +87,8 @@ class ZapSender(
                     amountMsats = amountMsats,
                     relayUrls = relayUrls,
                     lnurl = recipientLud16,
-                    message = message
+                    message = message,
+                    extraTags = extraTags
                 )
                 keypair != null -> Nip57.buildZapRequest(
                     senderPrivkey = keypair.privkey,
@@ -89,7 +98,8 @@ class ZapSender(
                     amountMsats = amountMsats,
                     relayUrls = relayUrls,
                     lnurl = recipientLud16,
-                    message = message
+                    message = message,
+                    extraTags = extraTags
                 )
                 else -> return Result.failure(Exception("No signer or keypair available"))
             }

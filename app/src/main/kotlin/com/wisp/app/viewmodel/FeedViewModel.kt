@@ -38,6 +38,7 @@ import com.wisp.app.repo.PinRepository
 import com.wisp.app.repo.ProfileRepository
 import com.wisp.app.repo.NwcRepository
 import com.wisp.app.repo.CustomEmojiRepository
+import com.wisp.app.repo.InterfacePreferences
 import com.wisp.app.repo.PowPreferences
 import com.wisp.app.repo.ZapPreferences
 import com.wisp.app.repo.RelayHintStore
@@ -186,8 +187,9 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    val interfacePrefs = InterfacePreferences(app)
     val nwcRepo = NwcRepository(app, relayPool, pubkeyHex)
-    val zapSender = ZapSender(keyRepo, nwcRepo, relayPool, relayListRepo, HttpClientFactory.createRelayClient())
+    val zapSender = ZapSender(keyRepo, nwcRepo, relayPool, relayListRepo, HttpClientFactory.createRelayClient(), interfacePrefs)
     val powManager = PowManager(powPrefs, relayPool, outboxRouter, eventRepo, viewModelScope)
 
     // -- Manager classes --
@@ -210,7 +212,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
 
     val socialActions: SocialActionManager = SocialActionManager(
         relayPool, outboxRouter, eventRepo, contactRepo, muteRepo, notifRepo, dmRepo,
-        pinRepo, deletedEventsRepo, nwcRepo, customEmojiRepo, zapSender, powPrefs, viewModelScope,
+        pinRepo, deletedEventsRepo, nwcRepo, customEmojiRepo, zapSender, powPrefs, interfacePrefs, viewModelScope,
         getSigner = { signer },
         getUserPubkey = { getUserPubkey() }
     )
