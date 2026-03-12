@@ -3,6 +3,7 @@ package com.wisp.app.relay
 import android.util.Log
 import com.wisp.app.nostr.RelayMessage
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -249,6 +250,8 @@ class Relay(
             webSocket = null
             pendingReconnect?.cancel(false)
             pendingReconnect = null
+            pendingReconnectJob?.cancel()
+            pendingReconnectJob = null
             // Acquire sendLock before cancel() to ensure no in-flight send() or
             // drainPendingMessages() is using the WebSocket when we tear it down.
             // Without this, cancel() can null OkHttp's internal writer mid-send → NPE.
@@ -268,6 +271,8 @@ class Relay(
             webSocket = null
             pendingReconnect?.cancel(false)
             pendingReconnect = null
+            pendingReconnectJob?.cancel()
+            pendingReconnectJob = null
             if (ws != null) {
                 synchronized(sendLock) { ws.cancel() }
             }
@@ -281,11 +286,13 @@ class Relay(
     }
 
     @Volatile private var pendingReconnect: ScheduledFuture<*>? = null
+    @Volatile private var pendingReconnectJob: Job? = null
 
     private fun reconnect() {
         if (!autoReconnect || !reconnectEnabled) return
         if (scope != null) {
-            scope.launch {
+            pendingReconnectJob?.cancel()
+            pendingReconnectJob = scope.launch {
                 val now = System.currentTimeMillis()
                 val delayMs = maxOf(3000L, cooldownUntil - now)
                 delay(delayMs)

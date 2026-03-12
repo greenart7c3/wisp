@@ -29,10 +29,15 @@ class RelayLifecycleManager(
     @Volatile private var lastReconnectMs = 0L
     @Volatile private var lastReconnectForce = false
 
+    /** Suppress network-change reconnects until this time (prevents double reconnect after resume). */
+    @Volatile private var resumeReconnectUntilMs = 0L
+
     companion object {
         private const val TAG = "RelayLifecycleMgr"
         private const val FORCE_THRESHOLD_MS = 30_000L
-        private const val DEBOUNCE_MS = 2_000L
+        private const val DEBOUNCE_MS = 5_000L
+        /** How long after a resume to suppress network-change-triggered reconnects. */
+        private const val RESUME_SUPPRESSION_MS = 10_000L
     }
 
     /**
@@ -56,9 +61,18 @@ class RelayLifecycleManager(
                             lastNetworkId = status.networkId
                             initialEmission = false
                         } else if (lastNetworkId != null && lastNetworkId != status.networkId) {
-                            Log.d(TAG, "Network changed ($lastNetworkId → ${status.networkId}), requesting reconnect")
-                            lastNetworkId = status.networkId
-                            reconnect(force = true)
+                            // Suppress network-change reconnects shortly after resume —
+                            // ConnectivityFlow often fires 2-5s after resume, causing a
+                            // second reconnect that tears down connections just established.
+                            val now = System.currentTimeMillis()
+                            if (now < resumeReconnectUntilMs) {
+                                Log.d(TAG, "Network changed ($lastNetworkId → ${status.networkId}), suppressed (within resume window)")
+                                lastNetworkId = status.networkId
+                            } else {
+                                Log.d(TAG, "Network changed ($lastNetworkId → ${status.networkId}), requesting reconnect")
+                                lastNetworkId = status.networkId
+                                reconnect(force = true)
+                            }
                         } else if (lastNetworkId == null) {
                             Log.d(TAG, "Network restored, requesting reconnect")
                             lastNetworkId = status.networkId
@@ -94,6 +108,9 @@ class RelayLifecycleManager(
         if (!started) return
         val force = pausedMs >= FORCE_THRESHOLD_MS
         Log.d("RLC", "[Lifecycle] onAppResume — paused ${pausedMs/1000}s, force=$force, connectedCount=${relayPool.connectedCount.value}")
+        // Set suppression window to prevent network-change reconnects from
+        // firing shortly after this resume and causing a double reconnect.
+        resumeReconnectUntilMs = System.currentTimeMillis() + RESUME_SUPPRESSION_MS
         reconnect(force = force)
     }
 
@@ -101,6 +118,9 @@ class RelayLifecycleManager(
      * Central reconnect entry point. Debounces rapid calls (e.g. ON_RESUME +
      * ConnectivityFlow firing within milliseconds of each other) and cancels
      * any in-flight reconnect job before starting a new one.
+     *
+     * Owns appIsActive lifecycle: sets false before reconnect, restores true
+     * in finally block to guarantee it's restored even on cancellation.
      */
     private fun reconnect(force: Boolean) {
         val now = System.currentTimeMillis()
@@ -121,18 +141,29 @@ class RelayLifecycleManager(
 
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
+            // Lifecycle manager owns appIsActive — set false before reconnect,
+            // restore in finally to guarantee it's set even on cancellation.
+            relayPool.appIsActive = false
             if (force) {
-                Log.d("RLC", "[Lifecycle] → forceReconnectAll()")
-                relayPool.forceReconnectAll()
+                relayPool.healthTracker?.closeAllSessions()
             } else {
-                Log.d("RLC", "[Lifecycle] → reconnectAll()")
-                relayPool.reconnectAll()
+                relayPool.healthTracker?.discardAllSessions()
             }
-            val minCount = if (force) 3 else 1
-            Log.d("RLC", "[Lifecycle] awaiting $minCount relays...")
-            relayPool.awaitAnyConnected(minCount = minCount, timeoutMs = 5_000)
-            Log.d("RLC", "[Lifecycle] await done — setting appIsActive=true, connectedCount=${relayPool.connectedCount.value}")
-            relayPool.appIsActive = true
+            try {
+                if (force) {
+                    Log.d("RLC", "[Lifecycle] → forceReconnectAll()")
+                    relayPool.forceReconnectAll()
+                } else {
+                    Log.d("RLC", "[Lifecycle] → reconnectAll()")
+                    relayPool.reconnectAll()
+                }
+                val minCount = if (force) 3 else 1
+                Log.d("RLC", "[Lifecycle] awaiting $minCount relays...")
+                relayPool.awaitAnyConnected(minCount = minCount, timeoutMs = 5_000)
+                Log.d("RLC", "[Lifecycle] await done — setting appIsActive=true, connectedCount=${relayPool.connectedCount.value}")
+            } finally {
+                relayPool.appIsActive = true
+            }
             Log.d("RLC", "[Lifecycle] → onReconnected(force=$force)")
             onReconnected(force)
             Log.d("RLC", "[Lifecycle] onReconnected complete, connectedCount=${relayPool.connectedCount.value}")

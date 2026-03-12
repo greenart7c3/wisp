@@ -99,6 +99,9 @@ class RelayPool {
             // onAppResume handles reconnection.
             setReconnectEnabled(value)
         }
+    /** True while reconnectAll/forceReconnectAll is in progress — guards health tracker
+     *  from recording disconnect churn as real failures. */
+    @Volatile var isReconnecting = false
     var healthTracker: RelayHealthTracker? = null
 
     companion object {
@@ -401,16 +404,16 @@ class RelayPool {
         }
         scope.launch(parentJob) {
             relay.connectionState.collect { connected ->
-                Log.d("RLC", "[Pool] connectionState=$connected for ${relay.config.url} | relay.isConnected=${relay.isConnected} appIsActive=$appIsActive")
+                Log.d("RLC", "[Pool] connectionState=$connected for ${relay.config.url} | relay.isConnected=${relay.isConnected} appIsActive=$appIsActive isReconnecting=$isReconnecting")
                 updateConnectedCount()
                 if (connected) {
                     // Always resync regardless of appIsActive — relays that connect
                     // during the awaitAnyConnected window (before appIsActive=true)
                     // would otherwise miss their subscriptions entirely.
                     resyncSubscriptions(relay)
-                    if (appIsActive) healthTracker?.onRelayConnected(relay.config.url)
+                    if (appIsActive && !isReconnecting) healthTracker?.onRelayConnected(relay.config.url)
                 } else {
-                    if (appIsActive) healthTracker?.closeSession(relay.config.url)
+                    if (appIsActive && !isReconnecting) healthTracker?.closeSession(relay.config.url)
                     subscriptionTracker.untrackRelay(relay.config.url)
                 }
             }
@@ -807,8 +810,7 @@ class RelayPool {
 
     fun reconnectAll(): Int {
         Log.d("RLC", "[Pool] reconnectAll() START — persistent=${relays.size} dm=${dmRelays.size} ephemeral=${ephemeralRelays.size} activeSubs=${activeSubscriptions.size}")
-        appIsActive = false
-        healthTracker?.discardAllSessions()
+        isReconnecting = true
         // Clear all cooldowns — background failures shouldn't block reconnection
         relayCooldowns.clear()
         // Only keep long-lived subscriptions that won't be re-established by onReconnected.
@@ -817,23 +819,36 @@ class RelayPool {
         for (relayMap in activeSubscriptions.values) {
             relayMap.keys.retainAll { subId -> keepPrefixes.any { subId.startsWith(it) } }
         }
-        // Tear down and reconnect ALL persistent relays unconditionally.
-        // WebSockets can be stale (server-side timeout, NAT rebinding) while
-        // OkHttp hasn't detected it yet — subscriptions sent to zombie sockets
-        // are silently lost. Unlike forceReconnectAll(), we preserve
-        // activeSubscriptions and subscriptionTracker so resync replays them.
+        // Smart reconnect: only tear down relays that are disconnected.
+        // Healthy relays are kept alive to avoid thundering herd on short resume.
+        var reconnected = 0
+        val keptAlive = mutableListOf<Relay>()
         for (relay in relays) {
             relay.resetBackoff()
-            relay.disconnect()
-            relay.connect()
             relay.reconnectEnabled = true
+            if (relay.isConnected) {
+                keptAlive.add(relay)
+            } else {
+                relay.disconnect()
+                relay.connect()
+                reconnected++
+            }
         }
-        // Tear down and reconnect ALL DM relays
         for (relay in dmRelays) {
             relay.resetBackoff()
-            relay.disconnect()
-            relay.connect()
             relay.reconnectEnabled = true
+            if (relay.isConnected) {
+                keptAlive.add(relay)
+            } else {
+                relay.disconnect()
+                relay.connect()
+                reconnected++
+            }
+        }
+        // Resync subscriptions on kept-alive relays — connectionState won't fire
+        // for them, so they'd miss any new subscriptions without this.
+        for (relay in keptAlive) {
+            resyncSubscriptions(relay)
         }
         // Evict ALL ephemeral relays — they'll be recreated on demand.
         // Even "connected" ephemerals may be stale and have autoReconnect=false.
@@ -846,10 +861,11 @@ class RelayPool {
         }
         ephemeralRelays.clear()
         ephemeralLastUsed.clear()
-        val count = relays.size + dmRelays.size
-        Log.d("RLC", "[Pool] reconnectAll() END — reconnecting $count relays, activeSubs remaining=${activeSubscriptions.size}")
+        isReconnecting = false
+        val total = relays.size + dmRelays.size
+        Log.d("RLC", "[Pool] reconnectAll() END — reconnected $reconnected/$total relays (${keptAlive.size} kept alive), activeSubs remaining=${activeSubscriptions.size}")
         updateConnectedCount()
-        return count
+        return total
     }
 
     /**
@@ -859,8 +875,7 @@ class RelayPool {
      */
     fun forceReconnectAll() {
         Log.d("RLC", "[Pool] forceReconnectAll() START — persistent=${relays.size} dm=${dmRelays.size} ephemeral=${ephemeralRelays.size}")
-        appIsActive = false
-        healthTracker?.closeAllSessions()
+        isReconnecting = true
         // Server-side subscriptions are dead — clear tracker so fresh REQs are sent
         subscriptionTracker.clear()
         activeSubscriptions.clear()
@@ -888,6 +903,7 @@ class RelayPool {
         }
         ephemeralRelays.clear()
         ephemeralLastUsed.clear()
+        isReconnecting = false
         Log.d("RLC", "[Pool] forceReconnectAll() END — all subs/trackers cleared")
         updateConnectedCount()
     }
