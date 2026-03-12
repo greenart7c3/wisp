@@ -200,9 +200,8 @@ class Relay(
         val ws = webSocket
         if (ws != null && isConnected) {
             onBytesSent?.invoke(config.url, message.length)
-            // OkHttp's MessageDeflater (permessage-deflate) is not thread-safe.
-            // Concurrent ws.send() calls crash with "Failed requirement" in deflate().
-            // Serialize all writes to the same WebSocket.
+            // Serialize all writes — OkHttp's WebSocket writer is not thread-safe.
+            // Also prevents cancel() (which acquires sendLock) from racing with send().
             synchronized(sendLock) {
                 return ws.send(message)
             }
@@ -250,11 +249,12 @@ class Relay(
             webSocket = null
             pendingReconnect?.cancel(false)
             pendingReconnect = null
-            // Always cancel() for immediate TCP teardown. Graceful close(1000) leaves
-            // OkHttp's reader thread alive waiting for the server's close frame — if we
-            // reconnect immediately (e.g. forceReconnectAll), the stale reader can crash
-            // with ArrayIndexOutOfBoundsException in Okio's buffer (size=0, byteCount=8192).
-            ws?.cancel()
+            // Acquire sendLock before cancel() to ensure no in-flight send() or
+            // drainPendingMessages() is using the WebSocket when we tear it down.
+            // Without this, cancel() can null OkHttp's internal writer mid-send → NPE.
+            if (ws != null) {
+                synchronized(sendLock) { ws.cancel() }
+            }
         }
     }
 
@@ -268,7 +268,9 @@ class Relay(
             webSocket = null
             pendingReconnect?.cancel(false)
             pendingReconnect = null
-            ws?.cancel()
+            if (ws != null) {
+                synchronized(sendLock) { ws.cancel() }
+            }
         }
     }
 
