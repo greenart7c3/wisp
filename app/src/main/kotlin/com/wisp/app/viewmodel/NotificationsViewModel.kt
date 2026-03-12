@@ -1,6 +1,7 @@
 package com.wisp.app.viewmodel
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.wisp.app.nostr.NotificationGroup
@@ -27,6 +28,12 @@ enum class NotificationFilter(val label: String) {
 }
 
 class NotificationsViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val settingsPrefs = app.getSharedPreferences("wisp_settings", Context.MODE_PRIVATE)
+
+    companion object {
+        private const val PREF_NOTIFICATION_FILTER = "notification_filter"
+    }
 
     val notifications: StateFlow<List<NotificationGroup>>
         get() = notifRepo?.notifications ?: MutableStateFlow(emptyList())
@@ -55,7 +62,7 @@ class NotificationsViewModel(app: Application) : AndroidViewModel(app) {
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing
 
-    private val _filter = MutableStateFlow(NotificationFilter.ALL)
+    private val _filter = MutableStateFlow(loadSavedFilter())
     val filter: StateFlow<NotificationFilter> = _filter
 
     private val _filteredNotifications = MutableStateFlow<List<NotificationGroup>>(emptyList())
@@ -107,6 +114,14 @@ class NotificationsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setFilter(filter: NotificationFilter) {
         _filter.value = filter
+        settingsPrefs.edit().putString(PREF_NOTIFICATION_FILTER, filter.name).apply()
+    }
+
+    private fun loadSavedFilter(): NotificationFilter {
+        val saved = settingsPrefs.getString(PREF_NOTIFICATION_FILTER, null)
+        return saved?.let {
+            try { NotificationFilter.valueOf(it) } catch (_: IllegalArgumentException) { null }
+        } ?: NotificationFilter.ALL
     }
 
     fun isFollowing(pubkey: String): Boolean {
