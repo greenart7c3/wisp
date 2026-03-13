@@ -885,15 +885,12 @@ fun WispNavHost(
             val searchSetListedIds by feedViewModel.bookmarkSetRepo.allListedEventIds.collectAsState()
             val searchBookmarkedIds by feedViewModel.bookmarkRepo.bookmarkedIds.collectAsState()
             val searchListedIds = remember(searchSetListedIds, searchBookmarkedIds) { searchSetListedIds + searchBookmarkedIds }
-            val extNetCache by feedViewModel.extendedNetworkRepo.cachedNetwork.collectAsState()
             SearchScreen(
                 viewModel = searchViewModel,
                 relayPool = feedViewModel.relayPool,
                 eventRepo = feedViewModel.eventRepo,
-                profileRepo = feedViewModel.profileRepo,
                 muteRepo = feedViewModel.muteRepo,
                 contactRepo = feedViewModel.contactRepo,
-                extendedNetworkCache = extNetCache,
                 onProfileClick = { pubkey ->
                     navController.navigate("profile/$pubkey")
                 },
@@ -911,9 +908,6 @@ fun WispNavHost(
                 },
                 onReact = { event, emoji ->
                     feedViewModel.toggleReaction(event, emoji)
-                },
-                onListClick = { list ->
-                    navController.navigate("list/${list.pubkey}/${list.dTag}")
                 },
                 onToggleFollow = { pubkey ->
                     feedViewModel.toggleFollow(pubkey)
@@ -1179,11 +1173,19 @@ fun WispNavHost(
                     }
                 )
             }
+            val interestSets by feedViewModel.interestRepo.sets.collectAsState()
             HashtagFeedScreen(
                 viewModel = hashtagFeedViewModel,
                 eventRepo = feedViewModel.eventRepo,
                 userPubkey = feedViewModel.getUserPubkey(),
                 noteActions = hashtagNoteActions,
+                interestSets = interestSets,
+                onFollowHashtag = { dTag -> feedViewModel.followHashtag(tag, dTag) },
+                onUnfollowHashtag = { dTag -> feedViewModel.unfollowHashtag(tag, dTag) },
+                onCreateDefaultSet = {
+                    feedViewModel.createInterestSet("Interests")
+                    feedViewModel.followHashtag(tag, "interests")
+                },
                 nip05Repo = feedViewModel.nip05Repo,
                 translationRepo = feedViewModel.translationRepo,
                 onBack = { navController.popBackStack() }

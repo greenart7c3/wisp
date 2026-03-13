@@ -9,7 +9,6 @@ import com.wisp.app.nostr.Nip10
 import com.wisp.app.nostr.NostrEvent
 import com.wisp.app.relay.RelayPool
 import com.wisp.app.repo.EventRepository
-import com.wisp.app.repo.KeyRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,8 +18,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 class HashtagFeedViewModel(app: Application) : AndroidViewModel(app) {
-    private val keyRepo = KeyRepository(app)
-
     private val _notes = MutableStateFlow<List<NostrEvent>>(emptyList())
     val notes: StateFlow<List<NostrEvent>> = _notes
 
@@ -35,10 +32,9 @@ class HashtagFeedViewModel(app: Application) : AndroidViewModel(app) {
     private var loadJob: Job? = null
     private val activeSubIds = mutableListOf<String>()
     private var topRelayUrls: List<String> = emptyList()
-
-    companion object {
-        private const val NOTE_SUB = "hashtag-notes"
-    }
+    private var loadCounter = 0
+    private var noteSub = "hashtag-notes-0"
+    private var engagePrefix = "hashtag-engage-0"
 
     fun loadHashtag(
         tag: String,
@@ -46,8 +42,6 @@ class HashtagFeedViewModel(app: Application) : AndroidViewModel(app) {
         eventRepo: EventRepository,
         topRelayUrls: List<String> = emptyList()
     ) {
-        if (tag == _hashtag.value && _notes.value.isNotEmpty()) return
-
         loadJob?.cancel()
         relayPoolRef?.let { closeAllSubs(it) }
 
@@ -58,25 +52,18 @@ class HashtagFeedViewModel(app: Application) : AndroidViewModel(app) {
         eventRepoRef = eventRepo
         this.topRelayUrls = topRelayUrls
 
-        val noteFilter = Filter(kinds = listOf(1), tTags = listOf(tag), limit = 100)
-        val noteReq = ClientMessage.req(NOTE_SUB, noteFilter)
-        activeSubIds.add(NOTE_SUB)
+        loadCounter++
+        noteSub = "hashtag-notes-$loadCounter"
+        engagePrefix = "hashtag-engage-$loadCounter"
 
-        val searchRelays = keyRepo.getSearchRelays().ifEmpty { SearchViewModel.DEFAULT_SEARCH_RELAYS }
-        for (url in searchRelays) {
-            relayPool.sendToRelayOrEphemeral(url, noteReq)
-        }
-        // Also query top scored relays
-        for (url in topRelayUrls) {
-            relayPool.sendToRelayOrEphemeral(url, noteReq)
-        }
+        val currentNoteSub = noteSub
 
         val seenIds = mutableSetOf<String>()
 
         loadJob = viewModelScope.launch {
             val eventJob = launch {
                 relayPool.relayEvents.collect { relayEvent ->
-                    if (relayEvent.subscriptionId == NOTE_SUB) {
+                    if (relayEvent.subscriptionId == currentNoteSub) {
                         val event = relayEvent.event
                         if (event.kind == 1 && event.id !in seenIds) {
                             seenIds.add(event.id)
@@ -87,7 +74,7 @@ class HashtagFeedViewModel(app: Application) : AndroidViewModel(app) {
                             _notes.value = current
                         }
                     }
-                    if (relayEvent.subscriptionId.startsWith("hashtag-engage")) {
+                    if (relayEvent.subscriptionId.startsWith(engagePrefix)) {
                         when (relayEvent.event.kind) {
                             7 -> eventRepo.addEvent(relayEvent.event)
                             9735 -> eventRepo.addEvent(relayEvent.event)
@@ -100,9 +87,19 @@ class HashtagFeedViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
 
+            // Send REQs after collectors are active
+            val noteFilter = Filter(kinds = listOf(1), tTags = listOf(tag), limit = 100)
+            val noteReq = ClientMessage.req(currentNoteSub, noteFilter)
+            activeSubIds.add(currentNoteSub)
+
+            relayPool.sendToRelayOrEphemeral(SearchViewModel.DEFAULT_SEARCH_RELAY, noteReq)
+            for (url in topRelayUrls) {
+                relayPool.sendToRelayOrEphemeral(url, noteReq)
+            }
+
             // Wait for EOSE or timeout, then subscribe engagement
             withTimeoutOrNull(5_000) {
-                relayPool.eoseSignals.first { it == NOTE_SUB }
+                relayPool.eoseSignals.first { it == currentNoteSub }
             }
             _isLoading.value = false
             subscribeEngagement(relayPool, eventRepo)
@@ -119,7 +116,7 @@ class HashtagFeedViewModel(app: Application) : AndroidViewModel(app) {
         if (eventIds.isEmpty()) return
 
         eventIds.chunked(50).forEachIndexed { index, batch ->
-            val subId = if (index == 0) "hashtag-engage" else "hashtag-engage-$index"
+            val subId = if (index == 0) engagePrefix else "$engagePrefix-$index"
             activeSubIds.add(subId)
             val filters = listOf(
                 Filter(kinds = listOf(7), eTags = batch),
@@ -129,11 +126,7 @@ class HashtagFeedViewModel(app: Application) : AndroidViewModel(app) {
             for (url in topRelayUrls) {
                 relayPool.sendToRelayOrEphemeral(url, ClientMessage.req(subId, filters))
             }
-            // Also send to search relays
-            val searchRelays = keyRepo.getSearchRelays().ifEmpty { SearchViewModel.DEFAULT_SEARCH_RELAYS }
-            for (url in searchRelays) {
-                relayPool.sendToRelayOrEphemeral(url, ClientMessage.req(subId, filters))
-            }
+            relayPool.sendToRelayOrEphemeral(SearchViewModel.DEFAULT_SEARCH_RELAY, ClientMessage.req(subId, filters))
         }
     }
 

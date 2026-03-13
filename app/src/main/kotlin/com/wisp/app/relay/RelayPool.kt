@@ -135,7 +135,7 @@ class RelayPool {
 
     /** Subscription prefixes that bypass event deduplication. */
     private val dedupBypassPrefixes = java.util.concurrent.CopyOnWriteArrayList(
-        listOf("thread-", "user", "quote-", "editprofile", "notif", "dms")
+        listOf("thread-", "user", "quote-", "editprofile", "notif", "dms", "search-", "hashtag-")
     )
 
     /** Signing lambda for NIP-42 AUTH — set via [setAuthSigner]. */
