@@ -1174,12 +1174,17 @@ fun WispNavHost(
                 )
             }
             val interestSets by feedViewModel.interestRepo.sets.collectAsState()
+            val interestSetsFetched by feedViewModel.interestSetsFetched.collectAsState()
+            LaunchedEffect(Unit) {
+                feedViewModel.fetchInterestSetsIfMissing()
+            }
             HashtagFeedScreen(
                 viewModel = hashtagFeedViewModel,
                 eventRepo = feedViewModel.eventRepo,
                 userPubkey = feedViewModel.getUserPubkey(),
                 noteActions = hashtagNoteActions,
                 interestSets = interestSets,
+                interestSetsLoaded = interestSetsFetched,
                 onFollowHashtag = { dTag -> feedViewModel.followHashtag(tag, dTag) },
                 onUnfollowHashtag = { dTag -> feedViewModel.unfollowHashtag(tag, dTag) },
                 onCreateDefaultSet = {

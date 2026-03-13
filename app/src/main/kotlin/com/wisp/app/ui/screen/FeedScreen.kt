@@ -309,8 +309,13 @@ fun FeedScreen(
     }
 
     if (showHashtagPicker) {
+        val interestSetsLoaded by viewModel.interestSetsFetched.collectAsState()
+        LaunchedEffect(Unit) {
+            viewModel.fetchInterestSetsIfMissing()
+        }
         HashtagPickerDialog(
             sets = interestSets,
+            isLoading = !interestSetsLoaded && interestSets.isEmpty(),
             onSelectHashtag = { tag ->
                 showHashtagPicker = false
                 onHashtagClick?.invoke(tag)
@@ -1622,6 +1627,7 @@ private fun ListPickerDialog(
 @Composable
 private fun HashtagPickerDialog(
     sets: List<com.wisp.app.nostr.InterestSet>,
+    isLoading: Boolean = false,
     onSelectHashtag: (String) -> Unit,
     onCreateSet: (String) -> Unit,
     onRenameSet: (String, String) -> Unit,
@@ -1638,7 +1644,20 @@ private fun HashtagPickerDialog(
         title = { Text("Hashtags") },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
-                if (sets.isEmpty()) {
+                if (isLoading) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.size(12.dp))
+                        Text(
+                            "Loading interest sets\u2026",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else if (sets.isEmpty()) {
                     Text(
                         "No interest sets yet. Create one below, or follow hashtags from their feed pages.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

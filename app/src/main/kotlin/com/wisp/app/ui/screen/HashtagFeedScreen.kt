@@ -56,6 +56,7 @@ fun HashtagFeedScreen(
     userPubkey: String?,
     noteActions: NoteActions,
     interestSets: List<InterestSet> = emptyList(),
+    interestSetsLoaded: Boolean = true,
     onFollowHashtag: (dTag: String) -> Unit = {},
     onUnfollowHashtag: (dTag: String) -> Unit = {},
     onCreateDefaultSet: () -> Unit = {},
@@ -95,22 +96,30 @@ fun HashtagFeedScreen(
                 },
                 actions = {
                     if (userPubkey != null) {
-                        IconButton(onClick = {
-                            val containingSets = interestSets.filter { hashtag.lowercase() in it.hashtags }
-                            if (containingSets.isNotEmpty()) {
-                                containingSets.forEach { onUnfollowHashtag(it.dTag) }
-                            } else if (interestSets.size == 1) {
-                                onFollowHashtag(interestSets.first().dTag)
-                            } else if (interestSets.isEmpty()) {
-                                onCreateDefaultSet()
-                            } else {
-                                showSetPicker = true
-                            }
-                        }) {
-                            Icon(
-                                if (isFollowing) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
-                                contentDescription = if (isFollowing) "Unfollow hashtag" else "Follow hashtag"
+                        if (!interestSetsLoaded && interestSets.isEmpty()) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp).padding(end = 4.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        } else {
+                            IconButton(onClick = {
+                                val containingSets = interestSets.filter { hashtag.lowercase() in it.hashtags }
+                                if (containingSets.isNotEmpty()) {
+                                    containingSets.forEach { onUnfollowHashtag(it.dTag) }
+                                } else if (interestSets.size == 1) {
+                                    onFollowHashtag(interestSets.first().dTag)
+                                } else if (interestSets.isEmpty()) {
+                                    onCreateDefaultSet()
+                                } else {
+                                    showSetPicker = true
+                                }
+                            }) {
+                                Icon(
+                                    if (isFollowing) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                    contentDescription = if (isFollowing) "Unfollow hashtag" else "Follow hashtag"
+                                )
+                            }
                         }
                     }
                 },

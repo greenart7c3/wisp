@@ -485,6 +485,51 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     fun renameInterestSet(dTag: String, newName: String) = listCrud.renameInterestSet(dTag, newName)
     fun deleteInterestSet(dTag: String) = listCrud.deleteInterestSet(dTag)
 
+    private val _interestSetsFetched = MutableStateFlow(false)
+    val interestSetsFetched: StateFlow<Boolean> = _interestSetsFetched
+
+    /**
+     * Fetch interest sets (kind 30015) from relays if none are cached locally.
+     * Called when entering hashtag feed to ensure we have up-to-date data.
+     */
+    suspend fun fetchInterestSetsIfMissing() {
+        if (interestRepo.sets.value.isNotEmpty()) {
+            _interestSetsFetched.value = true
+            return
+        }
+        val myPubkey = getUserPubkey() ?: run {
+            _interestSetsFetched.value = true
+            return
+        }
+
+        val subId = "interest_fetch_${myPubkey.take(8)}"
+        val filter = Filter(
+            kinds = listOf(Nip51.KIND_INTEREST_SET),
+            authors = listOf(myPubkey),
+            limit = 50
+        )
+
+        // Query own write (outbox) relays first, with fallback to all connected relays
+        outboxRouter.subscribeToUserWriteRelays(subId, myPubkey, filter)
+        // Also try indexer relays as safety net
+        val reqMsg = ClientMessage.req(subId, filter)
+        for (url in RelayConfig.DEFAULT_INDEXER_RELAYS) {
+            relayPool.sendToRelayOrEphemeral(url, reqMsg, skipBadCheck = true)
+        }
+
+        // Wait for events or timeout
+        withTimeoutOrNull(4000L) {
+            relayPool.relayEvents.first { it.subscriptionId == subId }
+        }
+
+        val closeMsg = ClientMessage.close(subId)
+        relayPool.closeOnAllRelays(subId)
+        for (url in RelayConfig.DEFAULT_INDEXER_RELAYS) {
+            relayPool.sendToRelay(url, closeMsg)
+        }
+        _interestSetsFetched.value = true
+    }
+
     fun setSelectedList(followSet: com.wisp.app.nostr.FollowSet) {
         listRepo.selectList(followSet)
     }
