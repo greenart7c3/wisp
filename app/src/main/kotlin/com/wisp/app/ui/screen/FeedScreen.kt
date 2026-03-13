@@ -6,6 +6,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
@@ -28,6 +30,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -75,6 +79,9 @@ import com.wisp.app.ui.component.ZapDialog
 import com.wisp.app.repo.RelayInfoRepository
 import com.wisp.app.relay.ScoredRelay
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -85,7 +92,14 @@ import com.wisp.app.viewmodel.FeedViewModel
 import com.wisp.app.viewmodel.InitLoadingState
 import com.wisp.app.viewmodel.PowStatus
 import com.wisp.app.viewmodel.RelayFeedStatus
+import com.wisp.app.viewmodel.TrendingMetric
+import com.wisp.app.viewmodel.TrendingTimeframe
+import com.wisp.app.viewmodel.buildTrendingRelayUrl
+import androidx.compose.material.icons.automirrored.outlined.Reply
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.CurrencyBitcoin
+import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.ui.draw.clip
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -154,30 +168,40 @@ fun FeedScreen(
     }
     val userPubkey = viewModel.getUserPubkey()
     val selectedList by viewModel.selectedList.collectAsState()
-    // Jump to top only when feed type, selected list, or selected relay actually changes
+    val trendingMetric by viewModel.trendingMetric.collectAsState()
+    val trendingTimeframe by viewModel.trendingTimeframe.collectAsState()
+    // Jump to top only when feed type, selected list, selected relay, or trending filters actually change
     // (not on recomposition after back-navigation from thread/compose)
     var prevFeedType by rememberSaveable { mutableStateOf(feedType.name) }
-    var prevSelectedList by rememberSaveable { mutableStateOf(selectedList) }
+    var prevSelectedListId by rememberSaveable { mutableStateOf(selectedList?.dTag) }
     var prevSelectedRelay by rememberSaveable { mutableStateOf(selectedRelay) }
     var prevSelectedRelaySet by rememberSaveable { mutableStateOf(selectedRelaySet?.name) }
+    var prevTrendingMetric by rememberSaveable { mutableStateOf(trendingMetric.name) }
+    var prevTrendingTimeframe by rememberSaveable { mutableStateOf(trendingTimeframe.name) }
 
-    LaunchedEffect(feedType, selectedList, selectedRelay, selectedRelaySet) {
+    LaunchedEffect(feedType, selectedList, selectedRelay, selectedRelaySet, trendingMetric, trendingTimeframe) {
         val feedTypeChanged = feedType.name != prevFeedType
-        val listChanged = selectedList != prevSelectedList
+        val listChanged = selectedList?.dTag != prevSelectedListId
         val relayChanged = selectedRelay != prevSelectedRelay
         val relaySetChanged = selectedRelaySet?.name != prevSelectedRelaySet
+        val metricChanged = trendingMetric.name != prevTrendingMetric
+        val timeframeChanged = trendingTimeframe.name != prevTrendingTimeframe
 
-        if (feedTypeChanged || listChanged || relayChanged || relaySetChanged) {
+        if (feedTypeChanged || listChanged || relayChanged || relaySetChanged || metricChanged || timeframeChanged) {
             prevFeedType = feedType.name
-            prevSelectedList = selectedList
+            prevSelectedListId = selectedList?.dTag
             prevSelectedRelay = selectedRelay
             prevSelectedRelaySet = selectedRelaySet?.name
+            prevTrendingMetric = trendingMetric.name
+            prevTrendingTimeframe = trendingTimeframe.name
             listState.scrollToItem(0)
         }
     }
     val ownLists by viewModel.listRepo.ownLists.collectAsState()
     var showRelayPicker by remember { mutableStateOf(false) }
     var showListPicker by remember { mutableStateOf(false) }
+    val interestSets by viewModel.interestRepo.sets.collectAsState()
+    var showHashtagPicker by remember { mutableStateOf(false) }
     var showRelayDropdown by remember { mutableStateOf(false) }
     var showFeedTypeDropdown by remember { mutableStateOf(false) }
     var showSocialGraphDialog by remember { mutableStateOf(false) }
@@ -281,6 +305,25 @@ fun FeedScreen(
             onCreateRelaySet = { name -> viewModel.createRelaySet(name) },
             onProbe = { domain -> viewModel.probeRelay(domain) },
             onDismiss = { showRelayPicker = false }
+        )
+    }
+
+    if (showHashtagPicker) {
+        val interestSetsLoaded by viewModel.interestSetsFetched.collectAsState()
+        LaunchedEffect(Unit) {
+            viewModel.fetchInterestSetsIfMissing()
+        }
+        HashtagPickerDialog(
+            sets = interestSets,
+            isLoading = !interestSetsLoaded && interestSets.isEmpty(),
+            onSelectHashtag = { tag ->
+                showHashtagPicker = false
+                onHashtagClick?.invoke(tag)
+            },
+            onCreateSet = { name -> viewModel.createInterestSet(name) },
+            onRenameSet = { dTag, name -> viewModel.renameInterestSet(dTag, name) },
+            onDeleteSet = { dTag -> viewModel.deleteInterestSet(dTag) },
+            onDismiss = { showHashtagPicker = false }
         )
     }
 
@@ -474,6 +517,7 @@ fun FeedScreen(
                                             FeedType.LIST -> if (selectedList != null) {
                                                 selectedList!!.name
                                             } else "List"
+                                            FeedType.TRENDING -> "Trending"
                                         }
                                         Text(
                                             feedLabel,
@@ -519,6 +563,16 @@ fun FeedScreen(
                                         }} else null
                                     )
                                     DropdownMenuItem(
+                                        text = { Text("Trending") },
+                                        onClick = {
+                                            showFeedTypeDropdown = false
+                                            viewModel.setFeedType(FeedType.TRENDING)
+                                        },
+                                        trailingIcon = if (feedType == FeedType.TRENDING) {{
+                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        }} else null
+                                    )
+                                    DropdownMenuItem(
                                         text = { Text("Relay") },
                                         onClick = {
                                             showFeedTypeDropdown = false
@@ -537,6 +591,13 @@ fun FeedScreen(
                                         trailingIcon = if (feedType == FeedType.LIST) {{
                                             Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                                         }} else null
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Hashtags") },
+                                        onClick = {
+                                            showFeedTypeDropdown = false
+                                            showHashtagPicker = true
+                                        }
                                     )
                                 }
                             }
@@ -662,6 +723,14 @@ fun FeedScreen(
                     relayFeedStatus = relayFeedStatus
                 )
             }
+            if (feedType == FeedType.TRENDING) {
+                TrendingFilterBar(
+                    metric = trendingMetric,
+                    timeframe = trendingTimeframe,
+                    onMetricChange = { viewModel.setTrendingMetric(it) },
+                    onTimeframeChange = { viewModel.setTrendingTimeframe(it) }
+                )
+            }
             Box(
                 modifier = Modifier.fillMaxSize()
             ) {
@@ -709,6 +778,13 @@ fun FeedScreen(
                                     status = relayFeedStatus,
                                     relayUrl = selectedRelay ?: "",
                                     onRetry = { viewModel.retryRelayFeed() }
+                                )
+                            }
+                            feedType == FeedType.TRENDING -> {
+                                RelayFeedEmptyState(
+                                    status = relayFeedStatus,
+                                    relayUrl = buildTrendingRelayUrl(trendingMetric, trendingTimeframe),
+                                    onRetry = { viewModel.setFeedType(FeedType.TRENDING) }
                                 )
                             }
                             initLoadingState != InitLoadingState.Done -> {
@@ -1547,6 +1623,190 @@ private fun ListPickerDialog(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun HashtagPickerDialog(
+    sets: List<com.wisp.app.nostr.InterestSet>,
+    isLoading: Boolean = false,
+    onSelectHashtag: (String) -> Unit,
+    onCreateSet: (String) -> Unit,
+    onRenameSet: (String, String) -> Unit,
+    onDeleteSet: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var newSetName by remember { mutableStateOf("") }
+    var renamingDTag by remember { mutableStateOf<String?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var confirmDeleteDTag by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Hashtags") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                if (isLoading) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.size(12.dp))
+                        Text(
+                            "Loading interest sets\u2026",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else if (sets.isEmpty()) {
+                    Text(
+                        "No interest sets yet. Create one below, or follow hashtags from their feed pages.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                } else {
+                    sets.forEach { set ->
+                        // Set header
+                        if (renamingDTag == set.dTag) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                            ) {
+                                androidx.compose.material3.OutlinedTextField(
+                                    value = renameText,
+                                    onValueChange = { renameText = it },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                TextButton(onClick = {
+                                    if (renameText.isNotBlank()) {
+                                        onRenameSet(set.dTag, renameText.trim())
+                                        renamingDTag = null
+                                    }
+                                }) { Text("Save") }
+                                TextButton(onClick = { renamingDTag = null }) { Text("Cancel") }
+                            }
+                        } else {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                            ) {
+                                Text(
+                                    set.name,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(
+                                    onClick = {
+                                        renamingDTag = set.dTag
+                                        renameText = set.name
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Edit,
+                                        contentDescription = "Rename",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { confirmDeleteDTag = set.dTag },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "Delete",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                        // Hashtags in this set
+                        if (set.hashtags.isEmpty()) {
+                            Text(
+                                "No hashtags yet",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 12.dp, bottom = 4.dp)
+                            )
+                        } else {
+                            FlowRow(
+                                modifier = Modifier.padding(start = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                set.hashtags.sorted().forEach { tag ->
+                                    Surface(
+                                        onClick = { onSelectHashtag(tag) },
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant
+                                    ) {
+                                        Text(
+                                            "#$tag",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(Modifier.size(8.dp))
+                    }
+                }
+                Spacer(Modifier.size(4.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = newSetName,
+                        onValueChange = { newSetName = it },
+                        placeholder = { Text("New set name") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(
+                        onClick = {
+                            if (newSetName.isNotBlank()) {
+                                onCreateSet(newSetName.trim())
+                                newSetName = ""
+                            }
+                        },
+                        enabled = newSetName.isNotBlank()
+                    ) {
+                        Text("Create")
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+
+    // Delete confirmation
+    if (confirmDeleteDTag != null) {
+        val dTag = confirmDeleteDTag!!
+        val setName = sets.find { it.dTag == dTag }?.name ?: dTag
+        AlertDialog(
+            onDismissRequest = { confirmDeleteDTag = null },
+            title = { Text("Delete Set") },
+            text = { Text("Delete \"$setName\" and all its hashtags?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeleteSet(dTag)
+                    confirmDeleteDTag = null
+                }) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteDTag = null }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun NewNotesButton(
@@ -1611,6 +1871,94 @@ private fun NewNotesButton(
                     }
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun TrendingFilterBar(
+    metric: TrendingMetric,
+    timeframe: TrendingTimeframe,
+    onMetricChange: (TrendingMetric) -> Unit,
+    onTimeframeChange: (TrendingTimeframe) -> Unit
+) {
+    val metricIcon = @Composable { m: TrendingMetric ->
+        when (m) {
+            TrendingMetric.REACTIONS -> Icon(Icons.Outlined.FavoriteBorder, contentDescription = m.label, modifier = Modifier.size(16.dp))
+            TrendingMetric.REPLIES -> Icon(Icons.AutoMirrored.Outlined.Reply, contentDescription = m.label, modifier = Modifier.size(16.dp))
+            TrendingMetric.REPOSTS -> Icon(Icons.Outlined.Repeat, contentDescription = m.label, modifier = Modifier.size(16.dp))
+            TrendingMetric.ZAPS -> Icon(Icons.Outlined.CurrencyBitcoin, contentDescription = m.label, modifier = Modifier.size(16.dp))
+        }
+    }
+
+    var showTimeframeDropdown by remember { mutableStateOf(false) }
+
+    Surface(color = MaterialTheme.colorScheme.surface) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TrendingMetric.entries.forEach { m ->
+                    FilterChip(
+                        selected = m == metric,
+                        onClick = { onMetricChange(m) },
+                        label = { metricIcon(m) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                            selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimary
+                        )
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                Box {
+                    Surface(
+                        onClick = { showTimeframeDropdown = true },
+                        shape = RoundedCornerShape(20.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                timeframe.label,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.width(2.dp))
+                            Icon(
+                                Icons.Default.ArrowDropDown,
+                                contentDescription = "Change timeframe",
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    DropdownMenu(
+                        expanded = showTimeframeDropdown,
+                        onDismissRequest = { showTimeframeDropdown = false }
+                    ) {
+                        TrendingTimeframe.entries.forEach { t ->
+                            DropdownMenuItem(
+                                text = { Text(t.label) },
+                                onClick = {
+                                    showTimeframeDropdown = false
+                                    onTimeframeChange(t)
+                                },
+                                trailingIcon = if (t == timeframe) {{
+                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                }} else null
+                            )
+                        }
+                    }
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
         }
     }
 }

@@ -116,7 +116,8 @@ object Nip57 {
         amountMsats: Long,
         relayUrls: List<String>,
         lnurl: String,
-        message: String = ""
+        message: String = "",
+        extraTags: List<List<String>> = emptyList()
     ): NostrEvent {
         val tags = mutableListOf<List<String>>()
         tags.add(listOf("p", recipientPubkey))
@@ -124,6 +125,7 @@ object Nip57 {
         tags.add(listOf("relays") + relayUrls)
         tags.add(listOf("amount", amountMsats.toString()))
         tags.add(listOf("lnurl", lnurl))
+        tags.addAll(extraTags)
 
         return NostrEvent.create(
             privkey = senderPrivkey,
@@ -141,7 +143,8 @@ object Nip57 {
         amountMsats: Long,
         relayUrls: List<String>,
         lnurl: String,
-        message: String = ""
+        message: String = "",
+        extraTags: List<List<String>> = emptyList()
     ): NostrEvent {
         val tags = mutableListOf<List<String>>()
         tags.add(listOf("p", recipientPubkey))
@@ -149,6 +152,7 @@ object Nip57 {
         tags.add(listOf("relays") + relayUrls)
         tags.add(listOf("amount", amountMsats.toString()))
         tags.add(listOf("lnurl", lnurl))
+        tags.addAll(extraTags)
 
         return signer.signEvent(kind = 9734, content = message, tags = tags)
     }

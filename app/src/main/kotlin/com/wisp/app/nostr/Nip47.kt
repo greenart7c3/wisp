@@ -144,6 +144,7 @@ object Nip47 {
         val content = when (request) {
             is NwcRequest.GetBalance -> buildJsonObject {
                 put("method", "get_balance")
+                put("params", buildJsonObject {})
             }
             is NwcRequest.PayInvoice -> buildJsonObject {
                 put("method", "pay_invoice")

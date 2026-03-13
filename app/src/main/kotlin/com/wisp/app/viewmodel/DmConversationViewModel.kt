@@ -1,7 +1,10 @@
 package com.wisp.app.viewmodel
 
+import android.content.ContentResolver
+import android.net.Uri
 import android.util.Log
 import android.app.Application
+import android.webkit.MimeTypeMap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.wisp.app.nostr.ClientMessage
@@ -11,16 +14,19 @@ import com.wisp.app.nostr.Nip17
 import com.wisp.app.nostr.Nip51
 import com.wisp.app.nostr.NostrSigner
 import com.wisp.app.nostr.SignerCancelledException
+import com.wisp.app.repo.MuteRepository
 import com.wisp.app.nostr.hexToByteArray
 import com.wisp.app.nostr.toHex
 import com.wisp.app.relay.RelayConfig
 import com.wisp.app.relay.RelayPool
+import com.wisp.app.repo.BlossomRepository
 import com.wisp.app.repo.DmRepository
 import com.wisp.app.repo.KeyRepository
 import com.wisp.app.repo.RelayListRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -34,6 +40,7 @@ data class PeerDeliveryRelays(
 
 class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
     private val keyRepo = KeyRepository(app)
+    private val blossomRepo = BlossomRepository(app, keyRepo.getPubkeyHex())
 
     private val _messages = MutableStateFlow<List<DmMessage>>(emptyList())
     val messages: StateFlow<List<DmMessage>> = _messages
@@ -47,11 +54,20 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
     private val _sendError = MutableStateFlow<String?>(null)
     val sendError: StateFlow<String?> = _sendError
 
+    private val _uploadProgress = MutableStateFlow<String?>(null)
+    val uploadProgress: StateFlow<String?> = _uploadProgress
+
     private val _peerDeliveryRelays = MutableStateFlow(PeerDeliveryRelays())
     val peerDeliveryRelays: StateFlow<PeerDeliveryRelays> = _peerDeliveryRelays
 
     private val _userDmRelays = MutableStateFlow<List<String>>(emptyList())
     val userDmRelays: StateFlow<List<String>> = _userDmRelays
+
+    private val _decrypting = MutableStateFlow(false)
+    val decrypting: StateFlow<Boolean> = _decrypting
+
+    private val _pendingDecryptCount = MutableStateFlow(0)
+    val pendingDecryptCount: StateFlow<Int> = _pendingDecryptCount
 
     private var peerPubkey: String = ""
     private var dmRepo: DmRepository? = null
@@ -91,6 +107,59 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
                 _messages.value = dmRepository.getConversation(peerPubkey)
             }
         }
+
+        // Mirror the repo's decrypting/pending state for the UI
+        viewModelScope.launch {
+            dmRepository.decrypting.collect { _decrypting.value = it }
+        }
+        viewModelScope.launch {
+            dmRepository.pendingDecryptCount.collect { _pendingDecryptCount.value = it }
+        }
+    }
+
+    /**
+     * Decrypt pending gift wraps using the remote signer.
+     * Shares the same pending queue as DmListViewModel — both screens can drive
+     * decryption and progress is visible from either.
+     */
+    fun decryptPending(signer: NostrSigner, muteRepo: MuteRepository? = null) {
+        val repo = dmRepo ?: return
+        val myPubkey = signer.pubkeyHex
+
+        viewModelScope.launch(Dispatchers.Default) {
+            if (repo.pendingDecryptCount.value == 0) return@launch
+
+            repo.markDecryptingStart()
+            try {
+                while (true) {
+                    val wrap = repo.takeNextPendingGiftWrap() ?: break
+                    try {
+                        val rumor = Nip17.unwrapGiftWrapRemote(signer, wrap.event) ?: continue
+                        val peerPubkey = if (rumor.pubkey == myPubkey) {
+                            rumor.tags.firstOrNull { it.size >= 2 && it[0] == "p" }?.get(1) ?: continue
+                        } else {
+                            rumor.pubkey
+                        }
+
+                        if (muteRepo?.isBlocked(peerPubkey) == true) continue
+
+                        val msg = DmMessage(
+                            id = "${wrap.event.id}:${rumor.createdAt}",
+                            senderPubkey = rumor.pubkey,
+                            content = rumor.content,
+                            createdAt = rumor.createdAt,
+                            giftWrapId = wrap.event.id,
+                            relayUrls = if (wrap.relayUrl.isNotEmpty()) setOf(wrap.relayUrl) else emptySet()
+                        )
+                        repo.addMessage(msg, peerPubkey)
+                    } catch (_: Exception) {
+                        // Individual wrap failed, continue with the rest
+                    }
+                }
+            } finally {
+                repo.markDecryptingEnd()
+            }
+        }
     }
 
     fun updateMessageText(value: String) {
@@ -99,6 +168,28 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearSendError() {
         _sendError.value = null
+    }
+
+    fun uploadMedia(uris: List<Uri>, contentResolver: ContentResolver, signer: NostrSigner? = null) {
+        viewModelScope.launch {
+            val total = uris.size
+            for ((index, uri) in uris.withIndex()) {
+                try {
+                    _uploadProgress.value = if (total > 1) "Uploading ${index + 1}/$total..." else "Uploading..."
+                    val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                        ?: throw Exception("Cannot read file")
+                    val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
+                    val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "bin"
+                    val url = blossomRepo.uploadMedia(bytes, mimeType, ext, signer)
+                    val current = _messageText.value
+                    _messageText.value = if (current.isBlank()) url else "$current\n$url"
+                } catch (e: Exception) {
+                    _sendError.value = "Upload failed: ${e.message}"
+                    break
+                }
+            }
+            _uploadProgress.value = null
+        }
     }
 
     /**

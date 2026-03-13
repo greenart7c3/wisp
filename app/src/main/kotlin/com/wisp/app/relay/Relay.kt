@@ -3,6 +3,7 @@ package com.wisp.app.relay
 import android.util.Log
 import com.wisp.app.nostr.RelayMessage
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -163,9 +164,9 @@ class Relay(
                         _connectionErrors.tryEmit(ConsoleLogEntry(
                             relayUrl = config.url,
                             type = ConsoleLogType.CONN_FAILURE,
-                            message = t.message ?: "Unknown error"
+                            message = t.message ?: t.javaClass.simpleName
                         ))
-                        _failures.tryEmit(RelayFailure(config.url, response?.code, t.message ?: "Unknown error"))
+                        _failures.tryEmit(RelayFailure(config.url, response?.code, t.message ?: t.javaClass.simpleName))
                         reconnect()
                     }
                 }
@@ -200,9 +201,8 @@ class Relay(
         val ws = webSocket
         if (ws != null && isConnected) {
             onBytesSent?.invoke(config.url, message.length)
-            // OkHttp's MessageDeflater (permessage-deflate) is not thread-safe.
-            // Concurrent ws.send() calls crash with "Failed requirement" in deflate().
-            // Serialize all writes to the same WebSocket.
+            // Serialize all writes — OkHttp's WebSocket writer is not thread-safe.
+            // Also prevents cancel() (which acquires sendLock) from racing with send().
             synchronized(sendLock) {
                 return ws.send(message)
             }
@@ -250,11 +250,14 @@ class Relay(
             webSocket = null
             pendingReconnect?.cancel(false)
             pendingReconnect = null
-            // Always cancel() for immediate TCP teardown. Graceful close(1000) leaves
-            // OkHttp's reader thread alive waiting for the server's close frame — if we
-            // reconnect immediately (e.g. forceReconnectAll), the stale reader can crash
-            // with ArrayIndexOutOfBoundsException in Okio's buffer (size=0, byteCount=8192).
-            ws?.cancel()
+            pendingReconnectJob?.cancel()
+            pendingReconnectJob = null
+            // Acquire sendLock before cancel() to ensure no in-flight send() or
+            // drainPendingMessages() is using the WebSocket when we tear it down.
+            // Without this, cancel() can null OkHttp's internal writer mid-send → NPE.
+            if (ws != null) {
+                synchronized(sendLock) { ws.cancel() }
+            }
         }
     }
 
@@ -268,7 +271,11 @@ class Relay(
             webSocket = null
             pendingReconnect?.cancel(false)
             pendingReconnect = null
-            ws?.cancel()
+            pendingReconnectJob?.cancel()
+            pendingReconnectJob = null
+            if (ws != null) {
+                synchronized(sendLock) { ws.cancel() }
+            }
         }
     }
 
@@ -279,11 +286,13 @@ class Relay(
     }
 
     @Volatile private var pendingReconnect: ScheduledFuture<*>? = null
+    @Volatile private var pendingReconnectJob: Job? = null
 
     private fun reconnect() {
         if (!autoReconnect || !reconnectEnabled) return
         if (scope != null) {
-            scope.launch {
+            pendingReconnectJob?.cancel()
+            pendingReconnectJob = scope.launch {
                 val now = System.currentTimeMillis()
                 val delayMs = maxOf(3000L, cooldownUntil - now)
                 delay(delayMs)

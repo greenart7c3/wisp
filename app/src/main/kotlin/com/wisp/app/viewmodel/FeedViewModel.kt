@@ -29,6 +29,7 @@ import com.wisp.app.repo.ExtendedNetworkRepository
 import com.wisp.app.repo.SocialGraphDb
 import com.wisp.app.repo.Nip05Repository
 import com.wisp.app.repo.KeyRepository
+import com.wisp.app.repo.InterestRepository
 import com.wisp.app.repo.ListRepository
 import com.wisp.app.repo.MetadataFetcher
 import com.wisp.app.repo.DeletedEventsRepository
@@ -42,6 +43,7 @@ import com.wisp.app.repo.WalletMode
 import com.wisp.app.repo.WalletModeRepository
 import com.wisp.app.repo.WalletProvider
 import com.wisp.app.repo.CustomEmojiRepository
+import com.wisp.app.repo.InterfacePreferences
 import com.wisp.app.repo.PowPreferences
 import com.wisp.app.repo.ZapPreferences
 import com.wisp.app.repo.RelayHintStore
@@ -66,7 +68,25 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-enum class FeedType { FOLLOWS, EXTENDED_FOLLOWS, RELAY, LIST }
+enum class FeedType { FOLLOWS, EXTENDED_FOLLOWS, RELAY, LIST, TRENDING }
+
+enum class TrendingMetric(val slug: String, val label: String) {
+    REACTIONS("reactions", "Reactions"),
+    REPLIES("replies", "Replies"),
+    REPOSTS("reposts", "Reposts"),
+    ZAPS("zaps", "Zaps")
+}
+
+enum class TrendingTimeframe(val slug: String, val label: String) {
+    TODAY("today", "Today"),
+    WEEK("7d", "7d"),
+    MONTH("30d", "30d"),
+    YEAR("1y", "1y"),
+    ALL("all", "All")
+}
+
+fun buildTrendingRelayUrl(metric: TrendingMetric, timeframe: TrendingTimeframe): String =
+    "wss://feeds.nostrarchives.com/notes/trending/${metric.slug}/${timeframe.slug}"
 
 sealed interface RelayFeedStatus {
     data object Idle : RelayFeedStatus
@@ -152,6 +172,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     val relaySetRepo = RelaySetRepository(app, pubkeyHex)
     val pinRepo = PinRepository(app, pubkeyHex)
     val blossomRepo = BlossomRepository(app, pubkeyHex)
+    val interestRepo = InterestRepository(app, pubkeyHex)
     val relayInfoRepo = RelayInfoRepository()
     val relayScoreBoard = RelayScoreBoard(app, relayListRepo, contactRepo, pubkeyHex)
     val outboxRouter = OutboxRouter(relayPool, relayListRepo, relayHintStore, relayScoreBoard)
@@ -160,6 +181,14 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         context = app,
         relayPool = relayPool,
         scope = viewModelScope,
+        onPreReconnect = {
+            // Start the trending relay connection early so it connects in parallel
+            // with persistent relays, not sequentially after them.
+            if (feedSub.feedType.value == FeedType.TRENDING) {
+                val url = buildTrendingRelayUrl(feedSub.trendingMetric.value, feedSub.trendingTimeframe.value)
+                relayPool.preConnectEphemeral(url)
+            }
+        },
         onReconnected = { force ->
             Log.d("RLC", "[FeedVM] onReconnected(force=$force) feedType=${feedSub.feedType.value} selectedRelay=${feedSub.selectedRelay.value} feedSize=${eventRepo.feed.value.size}")
             feedSub.subscribeFeed()
@@ -190,6 +219,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    val interfacePrefs = InterfacePreferences(app)
     val nwcRepo = NwcRepository(app, relayPool, pubkeyHex)
     val sparkRepo = SparkRepository(app, pubkeyHex)
     val walletModeRepo = WalletModeRepository(app, pubkeyHex)
@@ -200,7 +230,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
             else -> nwcRepo
         }
 
-    val zapSender = ZapSender(keyRepo, { activeWalletProvider }, relayPool, relayListRepo, HttpClientFactory.createRelayClient())
+    val zapSender = ZapSender(keyRepo, { activeWalletProvider }, relayPool, relayListRepo, HttpClientFactory.createRelayClient(), interfacePrefs)
     val powManager = PowManager(powPrefs, relayPool, outboxRouter, eventRepo, viewModelScope)
 
     // -- Manager classes --
@@ -212,24 +242,25 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
 
     val eventRouter: EventRouter = EventRouter(
         relayPool, eventRepo, contactRepo, muteRepo, notifRepo, listRepo, bookmarkRepo,
-        bookmarkSetRepo, pinRepo, blossomRepo, customEmojiRepo, relayListRepo, relaySetRepo,
+        bookmarkSetRepo, pinRepo, blossomRepo, customEmojiRepo, relayListRepo, interestRepo, relaySetRepo,
         relayScoreBoard, relayHintStore, keyRepo, dmRepo, extendedNetworkRepo, metadataFetcher,
         getUserPubkey = { getUserPubkey() },
         getSigner = { signer },
         getFeedSubId = { feedSub.feedSubId },
         getRelayFeedSubId = { feedSub.relayFeedSubId },
+        getIsTrendingFeed = { feedSub.feedType.value == FeedType.TRENDING },
         onRelayFeedEventReceived = { feedSub.onRelayFeedEventReceived() }
     )
 
     val socialActions: SocialActionManager = SocialActionManager(
         relayPool, outboxRouter, eventRepo, contactRepo, muteRepo, notifRepo, dmRepo,
-        pinRepo, deletedEventsRepo, { activeWalletProvider }, customEmojiRepo, zapSender, powPrefs, viewModelScope,
+        pinRepo, deletedEventsRepo, { activeWalletProvider }, customEmojiRepo, zapSender, powPrefs, interfacePrefs, viewModelScope,
         getSigner = { signer },
         getUserPubkey = { getUserPubkey() }
     )
 
     val listCrud: ListCrudManager = ListCrudManager(
-        relayPool, subManager, eventRepo, listRepo, bookmarkSetRepo, customEmojiRepo,
+        relayPool, subManager, eventRepo, listRepo, interestRepo, bookmarkSetRepo, customEmojiRepo,
         metadataFetcher, viewModelScope, processingDispatcher,
         getSigner = { signer },
         getUserPubkey = { getUserPubkey() }
@@ -237,7 +268,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
 
     val startup: StartupCoordinator = StartupCoordinator(
         relayPool, outboxRouter, subManager, eventRepo, eventPersistence, contactRepo, muteRepo, notifRepo,
-        listRepo, bookmarkRepo, bookmarkSetRepo, relaySetRepo, pinRepo, blossomRepo, customEmojiRepo,
+        listRepo, bookmarkRepo, bookmarkSetRepo, relaySetRepo, pinRepo, blossomRepo, interestRepo, customEmojiRepo,
         relayListRepo, relayScoreBoard, relayHintStore, healthTracker, keyRepo,
         extendedNetworkRepo, metadataFetcher, profileRepo, relayInfoRepo, nip05Repo,
         nwcRepo, dmRepo, zapPrefs, lifecycleManager, eventRouter, feedSub,
@@ -252,7 +283,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     val feed: StateFlow<List<NostrEvent>> = combine(
         feedSub.feedType, eventRepo.feed, eventRepo.relayFeed
     ) { type, main, relay ->
-        if (type == FeedType.RELAY) relay else main
+        if (type == FeedType.RELAY || type == FeedType.TRENDING) relay else main
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val newNoteCount: StateFlow<Int> = eventRepo.newNoteCount
 
@@ -283,10 +314,13 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     val isRefreshing: StateFlow<Boolean> = feedSub.isRefreshing
     val relayFeedStatus: StateFlow<RelayFeedStatus> = feedSub.relayFeedStatus
     val loadingScreenComplete: StateFlow<Boolean> = feedSub.loadingScreenComplete
+    val trendingMetric: StateFlow<TrendingMetric> = feedSub.trendingMetric
+    val trendingTimeframe: StateFlow<TrendingTimeframe> = feedSub.trendingTimeframe
     val selectedList: StateFlow<com.wisp.app.nostr.FollowSet?> = listRepo.selectedList
     val zapInProgress: StateFlow<Set<String>> = socialActions.zapInProgress
     val zapSuccess: SharedFlow<String> = socialActions.zapSuccess
     val zapError: SharedFlow<String> = socialActions.zapError
+    val reactionSent: SharedFlow<Unit> = socialActions.reactionSent
 
     fun getUserPubkey(): String? = keyRepo.getPubkeyHex()
     fun resetNewNoteCount() = eventRepo.resetNewNoteCount()
@@ -312,6 +346,8 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshFeed() = feedSub.refreshFeed()
     fun retryRelayFeed() = feedSub.retryRelayFeed()
     fun loadMore() = feedSub.loadMore()
+    fun setTrendingMetric(metric: TrendingMetric) = feedSub.setTrendingMetric(metric)
+    fun setTrendingTimeframe(timeframe: TrendingTimeframe) = feedSub.setTrendingTimeframe(timeframe)
     fun pauseEngagement() = feedSub.pauseEngagement()
     fun resumeEngagement() = feedSub.resumeEngagement()
 
@@ -454,6 +490,58 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     fun publishUserEmojiList(emojis: List<com.wisp.app.nostr.CustomEmoji>, setRefs: List<String>) = listCrud.publishUserEmojiList(emojis, setRefs)
     fun addSetToEmojiList(pubkey: String, dTag: String) = listCrud.addSetToEmojiList(pubkey, dTag)
     fun removeSetFromEmojiList(pubkey: String, dTag: String) = listCrud.removeSetFromEmojiList(pubkey, dTag)
+
+    // -- Interest set CRUD delegates --
+    fun followHashtag(tag: String, dTag: String) = listCrud.followHashtag(tag, dTag)
+    fun unfollowHashtag(tag: String, dTag: String) = listCrud.unfollowHashtag(tag, dTag)
+    fun createInterestSet(name: String) = listCrud.createInterestSet(name)
+    fun renameInterestSet(dTag: String, newName: String) = listCrud.renameInterestSet(dTag, newName)
+    fun deleteInterestSet(dTag: String) = listCrud.deleteInterestSet(dTag)
+
+    private val _interestSetsFetched = MutableStateFlow(false)
+    val interestSetsFetched: StateFlow<Boolean> = _interestSetsFetched
+
+    /**
+     * Fetch interest sets (kind 30015) from relays if none are cached locally.
+     * Called when entering hashtag feed to ensure we have up-to-date data.
+     */
+    suspend fun fetchInterestSetsIfMissing() {
+        if (interestRepo.sets.value.isNotEmpty()) {
+            _interestSetsFetched.value = true
+            return
+        }
+        val myPubkey = getUserPubkey() ?: run {
+            _interestSetsFetched.value = true
+            return
+        }
+
+        val subId = "interest_fetch_${myPubkey.take(8)}"
+        val filter = Filter(
+            kinds = listOf(Nip51.KIND_INTEREST_SET),
+            authors = listOf(myPubkey),
+            limit = 50
+        )
+
+        // Query own write (outbox) relays first, with fallback to all connected relays
+        outboxRouter.subscribeToUserWriteRelays(subId, myPubkey, filter)
+        // Also try indexer relays as safety net
+        val reqMsg = ClientMessage.req(subId, filter)
+        for (url in RelayConfig.DEFAULT_INDEXER_RELAYS) {
+            relayPool.sendToRelayOrEphemeral(url, reqMsg, skipBadCheck = true)
+        }
+
+        // Wait for events or timeout
+        withTimeoutOrNull(4000L) {
+            relayPool.relayEvents.first { it.subscriptionId == subId }
+        }
+
+        val closeMsg = ClientMessage.close(subId)
+        relayPool.closeOnAllRelays(subId)
+        for (url in RelayConfig.DEFAULT_INDEXER_RELAYS) {
+            relayPool.sendToRelay(url, closeMsg)
+        }
+        _interestSetsFetched.value = true
+    }
 
     fun setSelectedList(followSet: com.wisp.app.nostr.FollowSet) {
         listRepo.selectList(followSet)

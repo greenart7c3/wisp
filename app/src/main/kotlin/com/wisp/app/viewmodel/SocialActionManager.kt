@@ -24,6 +24,7 @@ import com.wisp.app.repo.WalletProvider
 import com.wisp.app.repo.PinRepository
 import com.wisp.app.repo.CustomEmojiRepository
 import com.wisp.app.repo.DeletedEventsRepository
+import com.wisp.app.repo.InterfacePreferences
 import com.wisp.app.repo.PowPreferences
 import com.wisp.app.repo.ZapSender
 import kotlinx.coroutines.CoroutineScope
@@ -53,6 +54,7 @@ class SocialActionManager(
     private val customEmojiRepo: CustomEmojiRepository,
     private val zapSender: ZapSender,
     private val powPrefs: PowPreferences,
+    private val interfacePrefs: InterfacePreferences,
     private val scope: CoroutineScope,
     private val getSigner: () -> NostrSigner?,
     private val getUserPubkey: () -> String?
@@ -65,6 +67,9 @@ class SocialActionManager(
 
     private val _zapError = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val zapError: SharedFlow<String> = _zapError
+
+    private val _reactionSent = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+    val reactionSent: SharedFlow<Unit> = _reactionSent
 
     fun toggleFollow(pubkey: String) {
         val s = getSigner() ?: return
@@ -135,7 +140,10 @@ class SocialActionManager(
         scope.launch {
             try {
                 val hint = outboxRouter.getRelayHint(event.pubkey)
-                val tags = Nip18.buildRepostTags(event, hint)
+                val tags = Nip18.buildRepostTags(event, hint).toMutableList()
+                if (interfacePrefs.isClientTagEnabled()) {
+                    tags.add(listOf("client", "Wisp"))
+                }
                 val repostEvent = s.signEvent(kind = 6, content = event.toJson(), tags = tags)
                 val msg = ClientMessage.event(repostEvent)
                 outboxRouter.publishToInbox(msg, event.pubkey)
@@ -177,6 +185,10 @@ class SocialActionManager(
                         Nip25.buildReactionTags(event)
                     }
 
+                    if (interfacePrefs.isClientTagEnabled()) {
+                        tags = tags + listOf(listOf("client", "Wisp"))
+                    }
+
                     val createdAt: Long
                     if (powPrefs.isReactionPowEnabled()) {
                         val pinned = System.currentTimeMillis() / 1000
@@ -200,6 +212,7 @@ class SocialActionManager(
                     val msg = ClientMessage.event(reactionEvent)
                     outboxRouter.publishToInbox(msg, event.pubkey)
                     eventRepo.addEvent(reactionEvent)
+                    _reactionSent.tryEmit(Unit)
                 }
             } catch (_: Exception) {}
         }

@@ -23,6 +23,7 @@ import com.wisp.app.repo.CustomEmojiRepository
 import com.wisp.app.repo.DmRepository
 import com.wisp.app.repo.EventRepository
 import com.wisp.app.repo.ExtendedNetworkRepository
+import com.wisp.app.repo.InterestRepository
 import com.wisp.app.repo.KeyRepository
 import com.wisp.app.repo.ListRepository
 import com.wisp.app.repo.MetadataFetcher
@@ -52,6 +53,7 @@ class EventRouter(
     private val blossomRepo: BlossomRepository,
     private val customEmojiRepo: CustomEmojiRepository,
     private val relayListRepo: RelayListRepository,
+    private val interestRepo: InterestRepository,
     private val relaySetRepo: RelaySetRepository,
     private val relayScoreBoard: RelayScoreBoard,
     private val relayHintStore: RelayHintStore,
@@ -63,6 +65,7 @@ class EventRouter(
     private val getSigner: () -> NostrSigner?,
     private val getFeedSubId: () -> String,
     private val getRelayFeedSubId: () -> String,
+    private val getIsTrendingFeed: () -> Boolean,
     private val onRelayFeedEventReceived: () -> Unit
 ) {
     // Track newest created_at per (pubkey, kind) to prevent stale overwrites
@@ -100,8 +103,8 @@ class EventRouter(
                     }
                     1 -> {
                         eventRepo.cacheEvent(event)
-                        val rootId = Nip10.getRootId(event) ?: Nip10.getReplyTarget(event)
-                        if (rootId != null) eventRepo.addReplyCount(rootId, event.id)
+                        val parentId = Nip10.getReplyTarget(event)
+                        if (parentId != null) eventRepo.addReplyCount(parentId, event.id)
                     }
                     else -> eventRepo.cacheEvent(event)
                 }
@@ -121,8 +124,8 @@ class EventRouter(
             val myPubkey = getUserPubkey()
             if (myPubkey != null && event.kind == 1) {
                 eventRepo.cacheEvent(event)
-                val rootId = Nip10.getRootId(event) ?: Nip10.getReplyTarget(event)
-                if (rootId != null) eventRepo.addReplyCount(rootId, event.id)
+                val parentId = Nip10.getReplyTarget(event)
+                if (parentId != null) eventRepo.addReplyCount(parentId, event.id)
                 notifRepo.addEvent(event, myPubkey, replyToMyEvent = true)
                 if (eventRepo.getProfileData(event.pubkey) == null) {
                     metadataFetcher.addToPendingProfiles(event.pubkey)
@@ -141,8 +144,8 @@ class EventRouter(
         } else if (subscriptionId == "self-notes") {
             eventRepo.cacheEvent(event)
             if (event.kind == 1) {
-                val rootId = Nip10.getRootId(event) ?: Nip10.getReplyTarget(event)
-                if (rootId != null) eventRepo.addReplyCount(rootId, event.id)
+                val parentId = Nip10.getReplyTarget(event)
+                if (parentId != null) eventRepo.addReplyCount(parentId, event.id)
             }
         } else if (subscriptionId.startsWith("quote-")) {
             eventRepo.cacheEvent(event)
@@ -152,8 +155,8 @@ class EventRouter(
         } else if (subscriptionId.startsWith("reply-count-")) {
             if (event.kind == 1) {
                 eventRepo.cacheEvent(event)
-                val rootId = Nip10.getRootId(event) ?: Nip10.getReplyTarget(event)
-                if (rootId != null) eventRepo.addReplyCount(rootId, event.id)
+                val parentId = Nip10.getReplyTarget(event)
+                if (parentId != null) eventRepo.addReplyCount(parentId, event.id)
             }
         } else if (subscriptionId.startsWith("zap-count-") || subscriptionId.startsWith("zap-rcpt-")) {
             if (event.kind == 9735) {
@@ -183,8 +186,8 @@ class EventRouter(
                 }
                 1 -> {
                     eventRepo.cacheEvent(event)
-                    val rootId = Nip10.getRootId(event) ?: Nip10.getReplyTarget(event)
-                    if (rootId != null) eventRepo.addReplyCount(rootId, event.id)
+                    val parentId = Nip10.getReplyTarget(event)
+                    if (parentId != null) eventRepo.addReplyCount(parentId, event.id)
                 }
             }
             // Engagement events win the dedup race against "notif" subscription,
@@ -291,6 +294,12 @@ class EventRouter(
                 } else null
                 listRepo.updateFromEvent(event, decrypted)
             }
+            if (event.kind == Nip51.KIND_INTEREST_SET) {
+                val myPubkey = getUserPubkey()
+                if (myPubkey != null && event.pubkey == myPubkey) {
+                    interestRepo.updateFromEvent(event)
+                }
+            }
             if (event.kind == Nip51.KIND_BOOKMARK_SET) {
                 val myPubkey = getUserPubkey()
                 val s = getSigner()
@@ -339,7 +348,11 @@ class EventRouter(
                 subscriptionId == "relay-loadmore"
             if (isRelayFeedSub) {
                 eventRepo.cacheEvent(event)
-                eventRepo.addRelayFeedEvent(event)
+                if (getIsTrendingFeed()) {
+                    eventRepo.addTrendingFeedEvent(event)
+                } else {
+                    eventRepo.addRelayFeedEvent(event)
+                }
                 onRelayFeedEventReceived()
                 eventRepo.addEventRelay(event.id, relayUrl)
                 if (event.kind == 1 || event.kind == 30023) {

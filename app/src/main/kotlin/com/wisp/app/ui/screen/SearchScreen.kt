@@ -36,8 +36,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -53,21 +51,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.wisp.app.nostr.FollowSet
 import com.wisp.app.nostr.NostrEvent
 import com.wisp.app.nostr.ProfileData
 import com.wisp.app.relay.RelayPool
 import com.wisp.app.repo.ContactRepository
 import com.wisp.app.repo.EventRepository
-import com.wisp.app.repo.ExtendedNetworkCache
 import com.wisp.app.repo.MuteRepository
-import com.wisp.app.repo.ProfileRepository
 import com.wisp.app.repo.TranslationRepository
 import com.wisp.app.ui.component.FollowButton
 import com.wisp.app.ui.component.PostCard
 import com.wisp.app.ui.component.ProfilePicture
-import com.wisp.app.viewmodel.LocalFilter
-import com.wisp.app.viewmodel.SearchTab
+import com.wisp.app.viewmodel.RelayOption
+import com.wisp.app.viewmodel.SearchFilter
 import com.wisp.app.viewmodel.SearchViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -76,16 +71,13 @@ fun SearchScreen(
     viewModel: SearchViewModel,
     relayPool: RelayPool,
     eventRepo: EventRepository,
-    profileRepo: ProfileRepository,
     muteRepo: MuteRepository? = null,
     contactRepo: ContactRepository? = null,
-    extendedNetworkCache: ExtendedNetworkCache? = null,
     onProfileClick: (String) -> Unit,
     onNoteClick: (NostrEvent) -> Unit,
     onQuotedNoteClick: ((String) -> Unit)? = null,
     onReply: (NostrEvent) -> Unit = {},
     onReact: (NostrEvent, String) -> Unit = { _, _ -> },
-    onListClick: (FollowSet) -> Unit = {},
     onToggleFollow: (String) -> Unit = {},
     onBlockUser: (String) -> Unit = {},
     userPubkey: String? = null,
@@ -95,18 +87,13 @@ fun SearchScreen(
     translationRepo: TranslationRepository? = null
 ) {
     val query by viewModel.query.collectAsState()
-    val selectedTab by viewModel.selectedTab.collectAsState()
-    val localFilter by viewModel.localFilter.collectAsState()
-    val localUsers by viewModel.localUsers.collectAsState()
-    val localNotes by viewModel.localNotes.collectAsState()
+    val filter by viewModel.filter.collectAsState()
     val users by viewModel.users.collectAsState()
     val notes by viewModel.notes.collectAsState()
-    val lists by viewModel.lists.collectAsState()
     val isSearching by viewModel.isSearching.collectAsState()
+    val selectedRelayOption by viewModel.selectedRelayOption.collectAsState()
+    val selectedRelayUrl by viewModel.selectedRelayUrl.collectAsState()
     val searchRelays by viewModel.searchRelays.collectAsState()
-    val selectedRelay by viewModel.selectedRelay.collectAsState()
-
-    val tabs = SearchTab.entries
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -124,414 +111,157 @@ fun SearchScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // People / Notes filter
-            ResultFilterSelector(
-                localFilter = localFilter,
-                onSelectFilter = { viewModel.selectLocalFilter(it) }
+            // Filter chips
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = filter == SearchFilter.PEOPLE,
+                    onClick = { viewModel.selectFilter(SearchFilter.PEOPLE) },
+                    label = { Text("People") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                    )
+                )
+                FilterChip(
+                    selected = filter == SearchFilter.NOTES,
+                    onClick = { viewModel.selectFilter(SearchFilter.NOTES) },
+                    label = { Text("Notes") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                    )
+                )
+            }
+
+            // Relay selector
+            RelaySelector(
+                searchRelays = searchRelays,
+                selectedOption = selectedRelayOption,
+                selectedRelayUrl = selectedRelayUrl,
+                onSelectDefault = { viewModel.selectDefaultRelay() },
+                onSelectAllRelays = { viewModel.selectAllRelays() },
+                onSelectRelay = { viewModel.selectRelay(it) },
+                onAddRelay = { viewModel.addSearchRelay(it) },
+                onRemoveRelay = { viewModel.removeSearchRelay(it) }
             )
 
-            // Tabs
-            TabRow(selectedTabIndex = tabs.indexOf(selectedTab)) {
-                Tab(
-                    selected = selectedTab == SearchTab.MY_DEVICE,
-                    onClick = { viewModel.selectTab(SearchTab.MY_DEVICE) },
-                    text = { Text("My Device") }
+            // Search bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { viewModel.updateQuery(it) },
+                    placeholder = { Text("Search users and notes") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (query.isNotEmpty()) {
+                            IconButton(onClick = { viewModel.clear() }) {
+                                Icon(Icons.Default.Clear, contentDescription = "Clear")
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(
+                        onSearch = { viewModel.search(query, relayPool, eventRepo, muteRepo) }
+                    ),
+                    modifier = Modifier.weight(1f)
                 )
-                Tab(
-                    selected = selectedTab == SearchTab.RELAYS,
-                    onClick = { viewModel.selectTab(SearchTab.RELAYS) },
-                    text = { Text("Relays") }
-                )
-            }
-
-            when (selectedTab) {
-                SearchTab.MY_DEVICE -> MyDeviceTab(
-                    query = query,
-                    localFilter = localFilter,
-                    localUsers = localUsers,
-                    localNotes = localNotes,
-                    eventRepo = eventRepo,
-                    contactRepo = contactRepo,
-                    onQueryChange = { viewModel.updateQuery(it, profileRepo, eventRepo) },
-                    onClear = { viewModel.clear() },
-                    onProfileClick = onProfileClick,
-                    onNoteClick = onNoteClick,
-                    onQuotedNoteClick = onQuotedNoteClick,
-                    onReply = onReply,
-                    onReact = onReact,
-                    onToggleFollow = onToggleFollow,
-                    onBlockUser = onBlockUser,
-                    userPubkey = userPubkey,
-                    listedIds = listedIds,
-                    onAddToList = onAddToList,
-                    onDeleteEvent = onDeleteEvent,
-                    translationRepo = translationRepo
-                )
-
-                SearchTab.RELAYS -> RelaysTab(
-                    query = query,
-                    users = users,
-                    notes = notes,
-                    lists = lists,
-                    isSearching = isSearching,
-                    localFilter = localFilter,
-                    searchRelays = searchRelays,
-                    selectedRelay = selectedRelay,
-                    onSelectRelay = { viewModel.selectRelay(it) },
-                    onAddRelay = { viewModel.addSearchRelay(it) },
-                    onRemoveRelay = { viewModel.removeSearchRelay(it) },
-                    onQueryChange = { viewModel.updateQuery(it, profileRepo, eventRepo) },
-                    onClear = { viewModel.clear() },
-                    onSearch = { viewModel.search(query, relayPool, eventRepo, muteRepo) },
-                    eventRepo = eventRepo,
-                    contactRepo = contactRepo,
-                    onProfileClick = onProfileClick,
-                    onNoteClick = onNoteClick,
-                    onQuotedNoteClick = onQuotedNoteClick,
-                    onReply = onReply,
-                    onReact = onReact,
-                    onListClick = onListClick,
-                    onToggleFollow = onToggleFollow,
-                    onBlockUser = onBlockUser,
-                    userPubkey = userPubkey,
-                    listedIds = listedIds,
-                    onAddToList = onAddToList,
-                    onDeleteEvent = onDeleteEvent,
-                    translationRepo = translationRepo
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun MyDeviceTab(
-    query: String,
-    localFilter: LocalFilter,
-    localUsers: List<ProfileData>,
-    localNotes: List<NostrEvent>,
-    eventRepo: EventRepository,
-    contactRepo: ContactRepository?,
-    onQueryChange: (String) -> Unit,
-    onClear: () -> Unit,
-    onProfileClick: (String) -> Unit,
-    onNoteClick: (NostrEvent) -> Unit,
-    onQuotedNoteClick: ((String) -> Unit)?,
-    onReply: (NostrEvent) -> Unit,
-    onReact: (NostrEvent, String) -> Unit,
-    onToggleFollow: (String) -> Unit,
-    onBlockUser: (String) -> Unit,
-    userPubkey: String?,
-    listedIds: Set<String>,
-    onAddToList: (String) -> Unit,
-    onDeleteEvent: (String, Int) -> Unit,
-    translationRepo: TranslationRepository? = null
-) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Search bar
-        SearchBar(
-            query = query,
-            onQueryChange = onQueryChange,
-            onClear = onClear
-        )
-
-        when {
-            query.isBlank() -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
+                IconButton(
+                    onClick = { viewModel.search(query, relayPool, eventRepo, muteRepo) }
                 ) {
-                    Text(
-                        "Search cached users and notes",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Icon(Icons.Default.Search, contentDescription = "Search")
                 }
             }
 
-            localFilter == LocalFilter.PEOPLE && localUsers.isEmpty() ||
-            localFilter == LocalFilter.NOTES && localNotes.isEmpty() -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "No results on your device",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+            // Results
+            when {
+                isSearching -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    }
                 }
-            }
 
-            localFilter == LocalFilter.PEOPLE -> {
-                val sortedLocalUsers = localUsers.sortedByDescending {
-                    contactRepo?.isFollowing(it.pubkey) == true
-                }
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(sortedLocalUsers, key = { it.pubkey }, contentType = { "user" }) { profile ->
-                        UserResultItem(
-                            profile = profile,
-                            isFollowing = contactRepo?.isFollowing(profile.pubkey) == true,
-                            onClick = { onProfileClick(profile.pubkey) },
-                            onToggleFollow = { onToggleFollow(profile.pubkey) }
+                users.isEmpty() && notes.isEmpty() && query.isNotEmpty() && !isSearching -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "No results found",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-            }
 
-            localFilter == LocalFilter.NOTES -> {
-                val translationVersion by translationRepo?.version?.collectAsState() ?: remember { androidx.compose.runtime.mutableIntStateOf(0) }
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(localNotes, key = { it.id }, contentType = { "post" }) { event ->
-                        val profile = eventRepo.getProfileData(event.pubkey)
-                        val translationState = remember(translationVersion, event.id) {
-                            translationRepo?.getState(event.id) ?: com.wisp.app.repo.TranslationState()
-                        }
-                        PostCard(
-                            event = event,
-                            profile = profile,
-                            onReply = { onReply(event) },
-                            onProfileClick = { onProfileClick(event.pubkey) },
-                            onNavigateToProfile = onProfileClick,
-                            onNoteClick = { onNoteClick(event) },
-                            onQuotedNoteClick = onQuotedNoteClick,
-                            onReact = { emoji -> onReact(event, emoji) },
-                            eventRepo = eventRepo,
-                            onFollowAuthor = { onToggleFollow(event.pubkey) },
-                            onBlockAuthor = { onBlockUser(event.pubkey) },
-                            isOwnEvent = event.pubkey == userPubkey,
-                            onAddToList = { onAddToList(event.id) },
-                            isInList = event.id in listedIds,
-                            onDelete = { onDeleteEvent(event.id, event.kind) },
-                            translationState = translationState,
-                            onTranslate = { translationRepo?.translate(event.id, event.content) }
+                users.isEmpty() && notes.isEmpty() -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "Search for users and notes on relays",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-            }
-        }
-    }
-}
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun RelaysTab(
-    query: String,
-    users: List<ProfileData>,
-    notes: List<NostrEvent>,
-    lists: List<FollowSet>,
-    isSearching: Boolean,
-    localFilter: LocalFilter,
-    searchRelays: List<String>,
-    selectedRelay: String?,
-    onSelectRelay: (String?) -> Unit,
-    onAddRelay: (String) -> Boolean,
-    onRemoveRelay: (String) -> Unit,
-    onQueryChange: (String) -> Unit,
-    onClear: () -> Unit,
-    onSearch: () -> Unit,
-    eventRepo: EventRepository,
-    contactRepo: ContactRepository?,
-    onProfileClick: (String) -> Unit,
-    onNoteClick: (NostrEvent) -> Unit,
-    onQuotedNoteClick: ((String) -> Unit)?,
-    onReply: (NostrEvent) -> Unit,
-    onReact: (NostrEvent, String) -> Unit,
-    onListClick: (FollowSet) -> Unit,
-    onToggleFollow: (String) -> Unit,
-    onBlockUser: (String) -> Unit,
-    userPubkey: String?,
-    listedIds: Set<String>,
-    onAddToList: (String) -> Unit,
-    onDeleteEvent: (String, Int) -> Unit,
-    translationRepo: TranslationRepository? = null
-) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Relay selector
-        RelaySelector(
-            searchRelays = searchRelays,
-            selectedRelay = selectedRelay,
-            onSelectRelay = onSelectRelay,
-            onAddRelay = onAddRelay,
-            onRemoveRelay = onRemoveRelay
-        )
-
-        // Search bar + Go
-        SearchBar(
-            query = query,
-            onQueryChange = onQueryChange,
-            onClear = onClear,
-            onSearch = onSearch
-        )
-
-    when {
-        isSearching -> {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-            }
-        }
-
-        users.isEmpty() && notes.isEmpty() && lists.isEmpty() && query.isNotEmpty() && !isSearching -> {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "No results found",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        users.isEmpty() && notes.isEmpty() && lists.isEmpty() -> {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "Press search to query relays",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        else -> {
-            val relayTranslationVersion by translationRepo?.version?.collectAsState() ?: remember { androidx.compose.runtime.mutableIntStateOf(0) }
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                if (localFilter == LocalFilter.PEOPLE) {
-                    val sortedUsers = users.sortedByDescending {
-                        contactRepo?.isFollowing(it.pubkey) == true
-                    }
-                    items(sortedUsers, key = { it.pubkey }, contentType = { "user" }) { profile ->
-                        UserResultItem(
-                            profile = profile,
-                            isFollowing = contactRepo?.isFollowing(profile.pubkey) == true,
-                            onClick = { onProfileClick(profile.pubkey) },
-                            onToggleFollow = { onToggleFollow(profile.pubkey) }
-                        )
-                    }
-                } else {
-                    if (lists.isNotEmpty()) {
-                        item {
-                            Text(
-                                "Lists",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                            )
-                        }
-                        items(lists, key = { "${it.pubkey}:${it.dTag}" }, contentType = { "list" }) { list ->
-                            ListResultItem(
-                                followSet = list,
-                                eventRepo = eventRepo,
-                                onClick = { onListClick(list) }
-                            )
-                        }
-                        if (notes.isNotEmpty()) {
-                            item {
-                                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                else -> {
+                    val translationVersion by translationRepo?.version?.collectAsState()
+                        ?: remember { androidx.compose.runtime.mutableIntStateOf(0) }
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        if (filter == SearchFilter.PEOPLE) {
+                            val sortedUsers = users.sortedByDescending {
+                                contactRepo?.isFollowing(it.pubkey) == true
+                            }
+                            items(sortedUsers, key = { it.pubkey }, contentType = { "user" }) { profile ->
+                                UserResultItem(
+                                    profile = profile,
+                                    isFollowing = contactRepo?.isFollowing(profile.pubkey) == true,
+                                    onClick = { onProfileClick(profile.pubkey) },
+                                    onToggleFollow = { onToggleFollow(profile.pubkey) }
+                                )
+                            }
+                        } else {
+                            items(notes, key = { it.id }, contentType = { "post" }) { event ->
+                                val profile = eventRepo.getProfileData(event.pubkey)
+                                val translationState = remember(translationVersion, event.id) {
+                                    translationRepo?.getState(event.id)
+                                        ?: com.wisp.app.repo.TranslationState()
+                                }
+                                PostCard(
+                                    event = event,
+                                    profile = profile,
+                                    onReply = { onReply(event) },
+                                    onProfileClick = { onProfileClick(event.pubkey) },
+                                    onNavigateToProfile = onProfileClick,
+                                    onNoteClick = { onNoteClick(event) },
+                                    onQuotedNoteClick = onQuotedNoteClick,
+                                    onReact = { emoji -> onReact(event, emoji) },
+                                    eventRepo = eventRepo,
+                                    onFollowAuthor = { onToggleFollow(event.pubkey) },
+                                    onBlockAuthor = { onBlockUser(event.pubkey) },
+                                    isOwnEvent = event.pubkey == userPubkey,
+                                    onAddToList = { onAddToList(event.id) },
+                                    isInList = event.id in listedIds,
+                                    onDelete = { onDeleteEvent(event.id, event.kind) },
+                                    translationState = translationState,
+                                    onTranslate = { translationRepo?.translate(event.id, event.content) }
+                                )
                             }
                         }
                     }
-
-                    items(notes, key = { it.id }, contentType = { "post" }) { event ->
-                        val profile = eventRepo.getProfileData(event.pubkey)
-                        val translationState = remember(relayTranslationVersion, event.id) {
-                            translationRepo?.getState(event.id) ?: com.wisp.app.repo.TranslationState()
-                        }
-                        PostCard(
-                            event = event,
-                            profile = profile,
-                            onReply = { onReply(event) },
-                            onProfileClick = { onProfileClick(event.pubkey) },
-                            onNavigateToProfile = onProfileClick,
-                            onNoteClick = { onNoteClick(event) },
-                            onQuotedNoteClick = onQuotedNoteClick,
-                            onReact = { emoji -> onReact(event, emoji) },
-                            eventRepo = eventRepo,
-                            onFollowAuthor = { onToggleFollow(event.pubkey) },
-                            onBlockAuthor = { onBlockUser(event.pubkey) },
-                            isOwnEvent = event.pubkey == userPubkey,
-                            onAddToList = { onAddToList(event.id) },
-                            isInList = event.id in listedIds,
-                            onDelete = { onDeleteEvent(event.id, event.kind) },
-                            translationState = translationState,
-                            onTranslate = { translationRepo?.translate(event.id, event.content) }
-                        )
-                    }
                 }
-            }
-        }
-    }
-    } // Column
-}
-
-@Composable
-private fun ResultFilterSelector(
-    localFilter: LocalFilter,
-    onSelectFilter: (LocalFilter) -> Unit
-) {
-    Row(
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        FilterChip(
-            selected = localFilter == LocalFilter.PEOPLE,
-            onClick = { onSelectFilter(LocalFilter.PEOPLE) },
-            label = { Text("People") },
-            colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primary,
-                selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-            )
-        )
-        FilterChip(
-            selected = localFilter == LocalFilter.NOTES,
-            onClick = { onSelectFilter(LocalFilter.NOTES) },
-            label = { Text("Notes") },
-            colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primary,
-                selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-            )
-        )
-    }
-}
-
-@Composable
-private fun SearchBar(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    onClear: () -> Unit,
-    onSearch: (() -> Unit)? = null
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = onQueryChange,
-            placeholder = { Text("Search users and notes") },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-            trailingIcon = {
-                if (query.isNotEmpty()) {
-                    IconButton(onClick = onClear) {
-                        Icon(Icons.Default.Clear, contentDescription = "Clear")
-                    }
-                }
-            },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = if (onSearch != null) ImeAction.Search else ImeAction.Done),
-            keyboardActions = KeyboardActions(
-                onSearch = { onSearch?.invoke() }
-            ),
-            modifier = Modifier.weight(1f)
-        )
-        if (onSearch != null) {
-            IconButton(onClick = onSearch) {
-                Icon(Icons.Default.Search, contentDescription = "Go")
             }
         }
     }
@@ -541,21 +271,30 @@ private fun SearchBar(
 @Composable
 private fun RelaySelector(
     searchRelays: List<String>,
-    selectedRelay: String?,
-    onSelectRelay: (String?) -> Unit,
+    selectedOption: RelayOption,
+    selectedRelayUrl: String?,
+    onSelectDefault: () -> Unit,
+    onSelectAllRelays: () -> Unit,
+    onSelectRelay: (String) -> Unit,
     onAddRelay: (String) -> Boolean,
     onRemoveRelay: (String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     var showAddDialog by remember { mutableStateOf(false) }
 
+    val displayText = when (selectedOption) {
+        RelayOption.DEFAULT -> SearchViewModel.DEFAULT_SEARCH_RELAY.removePrefix("wss://")
+        RelayOption.ALL_RELAYS -> "All relays"
+        RelayOption.INDIVIDUAL -> selectedRelayUrl?.removePrefix("wss://") ?: ""
+    }
+
     ExposedDropdownMenuBox(
         expanded = expanded,
         onExpandedChange = { expanded = it },
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        modifier = Modifier.padding(horizontal = 16.dp)
     ) {
         OutlinedTextField(
-            value = selectedRelay?.removePrefix("wss://") ?: "All relays",
+            value = displayText,
             onValueChange = {},
             readOnly = true,
             label = { Text("Search relay") },
@@ -569,13 +308,20 @@ private fun RelaySelector(
             expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {
+            // Default search relay
             DropdownMenuItem(
-                text = { Text("All relays") },
+                text = { Text(SearchViewModel.DEFAULT_SEARCH_RELAY.removePrefix("wss://")) },
                 onClick = {
-                    onSelectRelay(null)
+                    onSelectDefault()
                     expanded = false
                 }
             )
+
+            if (searchRelays.isNotEmpty()) {
+                HorizontalDivider()
+            }
+
+            // User's search relays
             searchRelays.forEach { url ->
                 DropdownMenuItem(
                     text = {
@@ -603,7 +349,21 @@ private fun RelaySelector(
                     }
                 )
             }
+
             HorizontalDivider()
+
+            // All relays option
+            DropdownMenuItem(
+                text = { Text("All relays") },
+                onClick = {
+                    onSelectAllRelays()
+                    expanded = false
+                }
+            )
+
+            HorizontalDivider()
+
+            // Add new relay
             DropdownMenuItem(
                 text = { Text("Add new") },
                 leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
@@ -659,46 +419,6 @@ private fun AddRelayDialog(
             }
         }
     )
-}
-
-@Composable
-private fun ListResultItem(
-    followSet: FollowSet,
-    eventRepo: EventRepository,
-    onClick: () -> Unit
-) {
-    val authorProfile = eventRepo.getProfileData(followSet.pubkey)
-    val authorName = authorProfile?.displayString
-        ?: followSet.pubkey.take(8) + "..."
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = followSet.name,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = "by $authorName",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1
-            )
-        }
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = "${followSet.members.size} members",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
 }
 
 @Composable

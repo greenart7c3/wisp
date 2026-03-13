@@ -43,6 +43,7 @@ import com.wisp.app.repo.SigningMode
 import android.content.Context
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import com.wisp.app.ui.component.HapticHelper
 import com.wisp.app.ui.component.NotifBlipSound
 import com.wisp.app.ui.component.WispBottomBar
 import com.wisp.app.ui.component.ZapDialog
@@ -316,7 +317,7 @@ fun WispNavHost(
 
     // Initialize compose viewmodel with shared repos
     LaunchedEffect(Unit) {
-        composeViewModel.init(feedViewModel.profileRepo, feedViewModel.contactRepo, feedViewModel.relayPool, feedViewModel.eventRepo)
+        composeViewModel.init(feedViewModel.profileRepo, feedViewModel.contactRepo, feedViewModel.relayPool, feedViewModel.eventRepo, feedViewModel.eventPersistence)
     }
 
     // Initialize DM list viewmodel with shared repo
@@ -333,7 +334,7 @@ fun WispNavHost(
     val currentRoute = navBackStackEntry?.destination?.route
 
     val nonAppRoutes = setOf(Routes.AUTH, Routes.LOADING, Routes.ONBOARDING_PROFILE, Routes.ONBOARDING_SUGGESTIONS, Routes.EXISTING_USER_ONBOARDING)
-    val hideBottomBarRoutes = nonAppRoutes
+    val hideBottomBarRoutes = nonAppRoutes + Routes.DM_CONVERSATION
     val socialGraphDiscoveryState by feedViewModel.extendedNetworkRepo.discoveryState.collectAsState()
     val socialGraphComputing = currentRoute == Routes.SOCIAL_GRAPH && (
         socialGraphDiscoveryState is com.wisp.app.repo.DiscoveryState.FetchingFollowLists ||
@@ -385,10 +386,41 @@ fun WispNavHost(
     DisposableEffect(Unit) {
         onDispose { notifBlipSound.release() }
     }
+    LaunchedEffect(Unit) { HapticHelper.init(context) }
     val currentNotifSoundEnabled by rememberUpdatedState(notifSoundEnabled)
     LaunchedEffect(Unit) {
         notificationsViewModel.notifReceived.collect {
-            if (currentNotifSoundEnabled) notifBlipSound.play()
+            if (currentNotifSoundEnabled) {
+                notifBlipSound.play()
+                HapticHelper.blip()
+            }
+        }
+    }
+    LaunchedEffect(Unit) {
+        notificationsViewModel.zapReceived.collect {
+            if (currentNotifSoundEnabled) HapticHelper.zapBuzz()
+        }
+    }
+    LaunchedEffect(Unit) {
+        notificationsViewModel.replyReceived.collect {
+            if (currentNotifSoundEnabled) HapticHelper.pulse()
+        }
+    }
+    LaunchedEffect(Unit) {
+        feedViewModel.reactionSent.collect { HapticHelper.blip() }
+    }
+    LaunchedEffect(Unit) {
+        feedViewModel.zapSuccess.collect { HapticHelper.zapBuzz() }
+    }
+    LaunchedEffect(Unit) {
+        var fired = false
+        feedViewModel.relayPool.broadcastState.collect { state ->
+            if (state != null && state.accepted > 0 && !fired) {
+                fired = true
+                HapticHelper.pulse()
+            } else if (state == null) {
+                fired = false
+            }
         }
     }
 
@@ -861,15 +893,12 @@ fun WispNavHost(
             val searchSetListedIds by feedViewModel.bookmarkSetRepo.allListedEventIds.collectAsState()
             val searchBookmarkedIds by feedViewModel.bookmarkRepo.bookmarkedIds.collectAsState()
             val searchListedIds = remember(searchSetListedIds, searchBookmarkedIds) { searchSetListedIds + searchBookmarkedIds }
-            val extNetCache by feedViewModel.extendedNetworkRepo.cachedNetwork.collectAsState()
             SearchScreen(
                 viewModel = searchViewModel,
                 relayPool = feedViewModel.relayPool,
                 eventRepo = feedViewModel.eventRepo,
-                profileRepo = feedViewModel.profileRepo,
                 muteRepo = feedViewModel.muteRepo,
                 contactRepo = feedViewModel.contactRepo,
-                extendedNetworkCache = extNetCache,
                 onProfileClick = { pubkey ->
                     navController.navigate("profile/$pubkey")
                 },
@@ -887,9 +916,6 @@ fun WispNavHost(
                 },
                 onReact = { event, emoji ->
                     feedViewModel.toggleReaction(event, emoji)
-                },
-                onListClick = { list ->
-                    navController.navigate("list/${list.pubkey}/${list.dTag}")
                 },
                 onToggleFollow = { pubkey ->
                     feedViewModel.toggleFollow(pubkey)
@@ -934,7 +960,9 @@ fun WispNavHost(
             val pubkey = backStackEntry.arguments?.getString("pubkey") ?: return@composable
             val dmConvoViewModel: DmConversationViewModel = viewModel()
             LaunchedEffect(pubkey) {
+                feedViewModel.refreshDmsAndNotifications()
                 dmConvoViewModel.init(pubkey, feedViewModel.dmRepo, feedViewModel.relayListRepo, feedViewModel.relayPool)
+                activeSigner?.let { dmConvoViewModel.decryptPending(it, feedViewModel.muteRepo) }
             }
             val peerProfile = feedViewModel.eventRepo.getProfileData(pubkey)
             val userPubkey = feedViewModel.getUserPubkey()
@@ -1153,11 +1181,24 @@ fun WispNavHost(
                     }
                 )
             }
+            val interestSets by feedViewModel.interestRepo.sets.collectAsState()
+            val interestSetsFetched by feedViewModel.interestSetsFetched.collectAsState()
+            LaunchedEffect(Unit) {
+                feedViewModel.fetchInterestSetsIfMissing()
+            }
             HashtagFeedScreen(
                 viewModel = hashtagFeedViewModel,
                 eventRepo = feedViewModel.eventRepo,
                 userPubkey = feedViewModel.getUserPubkey(),
                 noteActions = hashtagNoteActions,
+                interestSets = interestSets,
+                interestSetsLoaded = interestSetsFetched,
+                onFollowHashtag = { dTag -> feedViewModel.followHashtag(tag, dTag) },
+                onUnfollowHashtag = { dTag -> feedViewModel.unfollowHashtag(tag, dTag) },
+                onCreateDefaultSet = {
+                    feedViewModel.createInterestSet("Interests")
+                    feedViewModel.followHashtag(tag, "interests")
+                },
                 nip05Repo = feedViewModel.nip05Repo,
                 translationRepo = feedViewModel.translationRepo,
                 onBack = { navController.popBackStack() }

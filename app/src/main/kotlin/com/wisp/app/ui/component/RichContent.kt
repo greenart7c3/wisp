@@ -5,6 +5,9 @@ import android.util.LruCache
 import androidx.annotation.OptIn
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
@@ -12,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -19,6 +23,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -33,6 +41,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,12 +68,19 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import com.wisp.app.relay.HttpClientFactory
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.flow.MutableStateFlow
 import coil3.compose.AsyncImage
 import com.wisp.app.R
 import com.wisp.app.nostr.Nip19
@@ -74,12 +90,22 @@ import com.wisp.app.nostr.NostrUriData
 import com.wisp.app.repo.EventRepository
 import com.wisp.app.repo.Nip05Repository
 import com.wisp.app.util.MediaDownloader
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.PlayArrow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import org.json.JSONObject
 import java.net.URLEncoder
+
+data class MediaSettings(
+    val autoLoadMedia: Boolean = true,
+    val videoAutoPlay: Boolean = true
+)
+
+val LocalMediaSettings = compositionLocalOf { MediaSettings() }
 
 /**
  * Bundles event-generic action callbacks so quoted notes can render
@@ -110,6 +136,8 @@ internal sealed interface ContentSegment {
     data class TextSegment(val text: String) : ContentSegment
     data class ImageSegment(val url: String) : ContentSegment
     data class VideoSegment(val url: String) : ContentSegment
+    data class AudioSegment(val url: String) : ContentSegment
+    data class UnknownMediaSegment(val url: String) : ContentSegment
     data class LinkSegment(val url: String) : ContentSegment
     data class InlineLinkSegment(val url: String) : ContentSegment
     data class NostrNoteSegment(val eventId: String, val relayHints: List<String> = emptyList()) : ContentSegment
@@ -120,9 +148,58 @@ internal sealed interface ContentSegment {
 }
 
 private val imageExtensions = setOf("jpg", "jpeg", "png", "gif", "webp")
-private val videoExtensions = setOf("mp4", "mov", "webm")
+private val globalMuted = MutableStateFlow(true)
 
-private val combinedRegex = Regex("""nostr:(note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]+|(?<!\w)(npub1[a-z0-9]{58})(?!\w)|(?:https?|wss?)://\S+|(?<!\w)([a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.(?:com|net|org|io|dev|app|pro|ai|co|me|info|xyz|cc|tv|to|gg|sh|im|is|it|rs|ly|site|online|store|tech|cloud|social|world|earth|space|lol|wtf|family|life|art|design|blog|news|live|video|media|chat|games|money|finance|agency|studio|build|run|codes|systems|network|zone|pub|blue|limo|fyi|wiki|page|link|click|exchange|markets|fun|club|today)(?:/\S*)?)(?!\w)|(?<!\w)#([a-zA-Z0-9_][a-zA-Z0-9_-]*)""", RegexOption.IGNORE_CASE)
+private val videoExtensions = setOf("mp4", "mov", "webm")
+private val audioExtensions = setOf("mp3", "wav", "ogg", "m4a", "flac", "aac")
+
+private val imageMimeTypes = setOf("image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml")
+private val videoMimeTypes = setOf("video/mp4", "video/quicktime", "video/webm")
+private val audioMimeTypes = setOf("audio/mpeg", "audio/wav", "audio/ogg", "audio/mp4", "audio/flac", "audio/aac", "audio/x-wav")
+
+// Matches a bare SHA-256 hex hash as the URL path (no extension)
+private val blossomPathRegex = Regex("""^/[0-9a-f]{64}$""", RegexOption.IGNORE_CASE)
+
+/**
+ * Parse NIP-92 imeta tags from an event to build a URL→mime type map.
+ * Tag format: ["imeta", "url https://...", "m image/png", ...]
+ */
+internal fun parseImetaTags(event: NostrEvent): Map<String, String> {
+    val map = mutableMapOf<String, String>()
+    for (tag in event.tags) {
+        if (tag.firstOrNull() != "imeta" || tag.size < 2) continue
+        var url: String? = null
+        var mime: String? = null
+        for (i in 1 until tag.size) {
+            val entry = tag[i]
+            when {
+                entry.startsWith("url ") -> url = entry.removePrefix("url ")
+                entry.startsWith("m ") -> mime = entry.removePrefix("m ")
+            }
+        }
+        if (url != null && mime != null) map[url] = mime
+    }
+    return map
+}
+
+private fun classifyByMime(mime: String): String? = when {
+    imageMimeTypes.any { mime.startsWith(it) } -> "image"
+    videoMimeTypes.any { mime.startsWith(it) } -> "video"
+    audioMimeTypes.any { mime.startsWith(it) } -> "audio"
+    else -> null
+}
+
+private fun isBlossomUrl(url: String): Boolean {
+    return try {
+        val uri = Uri.parse(url)
+        val path = uri.path ?: return false
+        blossomPathRegex.matches(path)
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private val combinedRegex = Regex("""nostr:(note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]+|(?<!\w)(npub1[a-z0-9]{58})(?!\w|\.[a-zA-Z])|(?:https?|wss?)://\S+|(?<!\w)([a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.(?:com|net|org|io|dev|app|pro|ai|co|me|info|xyz|cc|tv|to|gg|sh|im|is|it|rs|ly|site|online|store|tech|cloud|social|world|earth|space|lol|wtf|family|life|art|design|blog|news|live|video|media|chat|games|money|finance|agency|studio|build|run|codes|systems|network|zone|pub|blue|limo|fyi|wiki|page|link|click|exchange|markets|fun|club|today)(?:/\S*)?)(?!\w)|(?<!\w)#([a-zA-Z0-9_][a-zA-Z0-9_-]*)""", RegexOption.IGNORE_CASE)
 
 private val emojiShortcodeRegex = Regex(""":([a-zA-Z0-9_]+):""")
 
@@ -142,7 +219,7 @@ private fun isStandaloneUrl(content: String, matchRange: IntRange): Boolean {
     return true
 }
 
-internal fun parseContent(content: String, emojiMap: Map<String, String> = emptyMap()): List<ContentSegment> {
+internal fun parseContent(content: String, emojiMap: Map<String, String> = emptyMap(), imetaMap: Map<String, String> = emptyMap()): List<ContentSegment> {
     val segments = mutableListOf<ContentSegment>()
     var lastEnd = 0
 
@@ -157,10 +234,16 @@ internal fun parseContent(content: String, emojiMap: Map<String, String> = empty
             segments.add(ContentSegment.HashtagSegment(hashtagCapture))
         } else if (!bareDomainCapture.isNullOrEmpty() && !token.startsWith("http")) {
             val url = "https://$bareDomainCapture"
+            val imetaMime = imetaMap[url]?.let { classifyByMime(it) }
             val ext = url.substringAfterLast('.').substringBefore('?').lowercase()
             when {
+                imetaMime == "image" -> segments.add(ContentSegment.ImageSegment(url))
+                imetaMime == "video" -> segments.add(ContentSegment.VideoSegment(url))
+                imetaMime == "audio" -> segments.add(ContentSegment.AudioSegment(url))
                 ext in imageExtensions -> segments.add(ContentSegment.ImageSegment(url))
                 ext in videoExtensions -> segments.add(ContentSegment.VideoSegment(url))
+                ext in audioExtensions -> segments.add(ContentSegment.AudioSegment(url))
+                isBlossomUrl(url) -> segments.add(ContentSegment.UnknownMediaSegment(url))
                 else -> segments.add(ContentSegment.LinkSegment(url))
             }
         } else if (token.startsWith("nostr:")) {
@@ -180,11 +263,17 @@ internal fun parseContent(content: String, emojiMap: Map<String, String> = empty
         } else {
             val url = token.trimEnd('.', ',', ')', ']', ';', ':', '!', '?')
             val isWebSocket = url.startsWith("wss://") || url.startsWith("ws://")
+            val imetaMime = imetaMap[url]?.let { classifyByMime(it) }
             val ext = url.substringAfterLast('.').substringBefore('?').lowercase()
             when {
+                imetaMime == "image" -> segments.add(ContentSegment.ImageSegment(url))
+                imetaMime == "video" -> segments.add(ContentSegment.VideoSegment(url))
+                imetaMime == "audio" -> segments.add(ContentSegment.AudioSegment(url))
                 ext in imageExtensions -> segments.add(ContentSegment.ImageSegment(url))
                 ext in videoExtensions -> segments.add(ContentSegment.VideoSegment(url))
+                ext in audioExtensions -> segments.add(ContentSegment.AudioSegment(url))
                 isWebSocket -> segments.add(ContentSegment.InlineLinkSegment(url))
+                isBlossomUrl(url) -> segments.add(ContentSegment.UnknownMediaSegment(url))
                 isStandaloneUrl(content, match.range) -> segments.add(ContentSegment.LinkSegment(url))
                 else -> segments.add(ContentSegment.InlineLinkSegment(url))
             }
@@ -236,6 +325,7 @@ fun RichContent(
     color: Color = MaterialTheme.colorScheme.onSurface,
     linkColor: Color = Color.Unspecified,
     emojiMap: Map<String, String> = emptyMap(),
+    imetaMap: Map<String, String> = emptyMap(),
     plainLinks: Boolean = false,
     eventRepo: EventRepository? = null,
     onProfileClick: ((String) -> Unit)? = null,
@@ -244,7 +334,7 @@ fun RichContent(
     noteActions: NoteActions? = null,
     modifier: Modifier = Modifier
 ) {
-    val segments = remember(content, emojiMap) { parseContent(content.trimEnd('\n', '\r'), emojiMap) }
+    val segments = remember(content, emojiMap, imetaMap) { parseContent(content.trimEnd('\n', '\r'), emojiMap, imetaMap) }
     val profileVer = eventRepo?.profileVersion?.collectAsState()?.value ?: 0
     var fullScreenImageUrl by remember { mutableStateOf<String?>(null) }
     var fullScreenVideoUrl by remember { mutableStateOf<String?>(null) }
@@ -443,6 +533,19 @@ fun RichContent(
                         InlineVideoPlayerWithFullscreen(
                             url = segment.url,
                             onFullScreen = { positionMs ->
+                                fullScreenVideoPositionMs = positionMs
+                                fullScreenVideoUrl = segment.url
+                            }
+                        )
+                    }
+                    is ContentSegment.AudioSegment -> {
+                        InlineAudioPlayer(url = segment.url)
+                    }
+                    is ContentSegment.UnknownMediaSegment -> {
+                        UnknownMediaContent(
+                            url = segment.url,
+                            onFullScreenImage = { fullScreenImageUrl = segment.url },
+                            onFullScreenVideo = { positionMs ->
                                 fullScreenVideoPositionMs = positionMs
                                 fullScreenVideoUrl = segment.url
                             }
@@ -1065,13 +1168,253 @@ private fun formatQuotedTimestamp(epoch: Long): String {
 }
 
 
+// Cache for HEAD-request content type lookups (shared across all instances)
+private val contentTypeCache = LruCache<String, String>(200)
+
+private enum class ResolvedMediaType { IMAGE, VIDEO, LINK }
+
+@Composable
+private fun UnknownMediaContent(
+    url: String,
+    onFullScreenImage: () -> Unit,
+    onFullScreenVideo: (positionMs: Long) -> Unit
+) {
+    var resolved by remember(url) { mutableStateOf(contentTypeCache.get(url)?.let { classifyByMime(it) }) }
+    var loading by remember(url) { mutableStateOf(resolved == null) }
+
+    if (loading) {
+        LaunchedEffect(url) {
+            val type = withContext(Dispatchers.IO) {
+                try {
+                    val request = Request.Builder().url(url).head().build()
+                    val client = HttpClientFactory.createHttpClient(
+                        connectTimeoutSeconds = 5,
+                        readTimeoutSeconds = 5
+                    )
+                    client.newCall(request).execute().use { response ->
+                        response.header("Content-Type")
+                    }
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            if (type != null) contentTypeCache.put(url, type)
+            resolved = type?.let { classifyByMime(it) }
+            loading = false
+        }
+    }
+
+    when {
+        loading -> {
+            // Show a compact loading placeholder
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(200.dp)
+                    .padding(vertical = 4.dp)
+                    .clip(RoundedCornerShape(12.dp))
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp
+                    )
+                }
+            }
+        }
+        resolved == "image" -> {
+            ImageWithContextMenu(url = url, onFullScreen = onFullScreenImage)
+        }
+        resolved == "video" -> {
+            InlineVideoPlayerWithFullscreen(url = url, onFullScreen = onFullScreenVideo)
+        }
+        resolved == "audio" -> {
+            InlineAudioPlayer(url = url)
+        }
+        else -> {
+            // Fallback: try loading as image (most blossom content is images)
+            ImageWithContextMenu(url = url, onFullScreen = onFullScreenImage)
+        }
+    }
+}
+
+@OptIn(UnstableApi::class)
+@Composable
+private fun InlineAudioPlayer(url: String) {
+    val context = LocalContext.current
+    val autoLoad = LocalMediaSettings.current.autoLoadMedia
+    var loaded by remember { mutableStateOf(autoLoad) }
+
+    if (!loaded) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { loaded = true }
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(16.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = "Play audio",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "Tap to load audio",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
+
+    val player = remember {
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(url))
+            prepare()
+        }
+    }
+
+    DisposableEffect(url) {
+        onDispose { player.release() }
+    }
+
+    var isPlaying by remember { mutableStateOf(false) }
+    var currentPosition by remember { mutableLongStateOf(0L) }
+    var duration by remember { mutableLongStateOf(0L) }
+
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+            }
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_READY) {
+                    duration = player.duration.coerceAtLeast(0L)
+                }
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+
+    // Poll position while playing
+    LaunchedEffect(isPlaying) {
+        while (isPlaying) {
+            currentPosition = player.currentPosition.coerceAtLeast(0L)
+            withContext(Dispatchers.Main) {
+                kotlinx.coroutines.delay(250)
+            }
+        }
+        // Update once more when paused
+        currentPosition = player.currentPosition.coerceAtLeast(0L)
+    }
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clip(RoundedCornerShape(12.dp))
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+            IconButton(
+                onClick = {
+                    if (isPlaying) player.pause()
+                    else player.play()
+                }
+            ) {
+                Icon(
+                    imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    contentDescription = if (isPlaying) "Pause" else "Play",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // Progress bar
+            val progress = if (duration > 0) currentPosition.toFloat() / duration.toFloat() else 0f
+            androidx.compose.material3.LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier
+                    .weight(1f)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp)),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
+            )
+
+            Spacer(Modifier.width(8.dp))
+
+            // Timestamp
+            Text(
+                text = formatAudioTime(currentPosition) + " / " + formatAudioTime(duration),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+private fun formatAudioTime(ms: Long): String {
+    val totalSeconds = (ms / 1000).toInt()
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "%d:%02d".format(minutes, seconds)
+}
+
 @kotlin.OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ImageWithContextMenu(url: String, onFullScreen: () -> Unit) {
+    val autoLoad = LocalMediaSettings.current.autoLoadMedia
+    var loaded by remember { mutableStateOf(autoLoad) }
     var showMenu by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
+
+    if (!loaded) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(200.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { loaded = true },
+            color = MaterialTheme.colorScheme.surfaceVariant
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Image,
+                    contentDescription = "Load image",
+                    modifier = Modifier.size(40.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Tap to load",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
 
     Box {
         AsyncImage(
@@ -1111,54 +1454,161 @@ private fun ImageWithContextMenu(url: String, onFullScreen: () -> Unit) {
 @OptIn(UnstableApi::class)
 @Composable
 private fun InlineVideoPlayerWithFullscreen(url: String, onFullScreen: (positionMs: Long) -> Unit) {
+    val mediaSettings = LocalMediaSettings.current
+    var loaded by remember { mutableStateOf(mediaSettings.autoLoadMedia) }
+
+    if (!loaded) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(200.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { loaded = true },
+            color = MaterialTheme.colorScheme.surfaceVariant
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = "Load video",
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Tap to load",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
+
     val context = LocalContext.current
+    val view = LocalView.current
+    var videoAspectRatio by remember { mutableFloatStateOf(16f / 9f) }
+    val isMuted by globalMuted.collectAsState()
+    var showControls by remember { mutableStateOf(false) }
+    var userPaused by remember { mutableStateOf(false) }
     val exoPlayer = remember(url) {
         HttpClientFactory.createExoPlayer(context).apply {
             setMediaItem(MediaItem.fromUri(Uri.parse(url)))
             prepare()
+            volume = if (globalMuted.value) 0f else 1f
             playWhenReady = false
         }
     }
 
+    // Sync volume with global mute state
+    LaunchedEffect(isMuted) {
+        exoPlayer.volume = if (isMuted) 0f else 1f
+    }
+
     DisposableEffect(url) {
-        onDispose { exoPlayer.release() }
+        val listener = object : Player.Listener {
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    videoAspectRatio = videoSize.width.toFloat() / videoSize.height.toFloat()
+                }
+            }
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (!isPlaying && exoPlayer.playbackState == Player.STATE_READY) {
+                    userPaused = true
+                }
+            }
+        }
+        exoPlayer.addListener(listener)
+        onDispose {
+            exoPlayer.removeListener(listener)
+            exoPlayer.release()
+        }
     }
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
+            .onGloballyPositioned { coordinates ->
+                val bounds = coordinates.boundsInWindow()
+                val viewHeight = view.height.toFloat()
+                val visibleTop = bounds.top.coerceAtLeast(0f)
+                val visibleBottom = bounds.bottom.coerceAtMost(viewHeight)
+                val visibleHeight = (visibleBottom - visibleTop).coerceAtLeast(0f)
+                val totalHeight = bounds.height
+                val visibleFraction = if (totalHeight > 0) visibleHeight / totalHeight else 0f
+                if (visibleFraction > 0.5f) {
+                    if (mediaSettings.videoAutoPlay && !exoPlayer.isPlaying && !userPaused) exoPlayer.play()
+                } else {
+                    if (exoPlayer.isPlaying) exoPlayer.pause()
+                    userPaused = false
+                }
+            }
     ) {
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     player = exoPlayer
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                     useController = true
+                    controllerAutoShow = false
+                    controllerShowTimeoutMs = 2000
+                    setControllerVisibilityListener(
+                        PlayerView.ControllerVisibilityListener { visibility ->
+                            showControls = visibility == android.view.View.VISIBLE
+                        }
+                    )
+                    hideController()
                 }
             },
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(16f / 9f)
+                .heightIn(max = 500.dp)
+                .aspectRatio(videoAspectRatio)
         )
-        IconButton(
-            onClick = {
-                val position = exoPlayer.currentPosition
-                exoPlayer.pause()
-                onFullScreen(position)
-            },
-            colors = IconButtonDefaults.iconButtonColors(
-                containerColor = Color.Black.copy(alpha = 0.5f),
-                contentColor = Color.White
-            ),
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(8.dp)
-                .size(36.dp)
+        AnimatedVisibility(
+            visible = showControls,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopEnd)
         ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_fullscreen),
-                contentDescription = "Fullscreen"
-            )
+            Row(
+                modifier = Modifier.padding(8.dp)
+            ) {
+                val buttonColors = IconButtonDefaults.iconButtonColors(
+                    containerColor = Color.Black.copy(alpha = 0.5f),
+                    contentColor = Color.White
+                )
+                IconButton(
+                    onClick = { globalMuted.value = !isMuted },
+                    colors = buttonColors,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isMuted) Icons.AutoMirrored.Filled.VolumeOff
+                            else Icons.AutoMirrored.Filled.VolumeUp,
+                        contentDescription = if (isMuted) "Unmute" else "Mute"
+                    )
+                }
+                Spacer(Modifier.width(4.dp))
+                IconButton(
+                    onClick = {
+                        val position = exoPlayer.currentPosition
+                        exoPlayer.pause()
+                        onFullScreen(position)
+                    },
+                    colors = buttonColors,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_fullscreen),
+                        contentDescription = "Fullscreen"
+                    )
+                }
+            }
         }
     }
 }
@@ -1166,28 +1616,141 @@ private fun InlineVideoPlayerWithFullscreen(url: String, onFullScreen: (position
 @OptIn(UnstableApi::class)
 @Composable
 private fun InlineVideoPlayer(url: String, modifier: Modifier = Modifier) {
+    val mediaSettings = LocalMediaSettings.current
+    var loaded by remember { mutableStateOf(mediaSettings.autoLoadMedia) }
+
+    if (!loaded) {
+        Surface(
+            modifier = modifier
+                .heightIn(max = 500.dp)
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { loaded = true },
+            color = MaterialTheme.colorScheme.surfaceVariant
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = "Load video",
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Tap to load",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
+
     val context = LocalContext.current
+    val view = LocalView.current
+    var videoAspectRatio by remember { mutableFloatStateOf(16f / 9f) }
+    val isMuted by globalMuted.collectAsState()
+    var showControls by remember { mutableStateOf(false) }
+    var userPaused by remember { mutableStateOf(false) }
     val exoPlayer = remember(url) {
         HttpClientFactory.createExoPlayer(context).apply {
             setMediaItem(MediaItem.fromUri(Uri.parse(url)))
             prepare()
+            volume = if (globalMuted.value) 0f else 1f
             playWhenReady = false
         }
     }
 
-    DisposableEffect(url) {
-        onDispose { exoPlayer.release() }
+    LaunchedEffect(isMuted) {
+        exoPlayer.volume = if (isMuted) 0f else 1f
     }
 
-    AndroidView(
-        factory = { ctx ->
-            PlayerView(ctx).apply {
-                player = exoPlayer
-                useController = true
+    DisposableEffect(url) {
+        val listener = object : Player.Listener {
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    videoAspectRatio = videoSize.width.toFloat() / videoSize.height.toFloat()
+                }
             }
-        },
-        modifier = modifier.aspectRatio(16f / 9f)
-    )
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (!isPlaying && exoPlayer.playbackState == Player.STATE_READY) {
+                    userPaused = true
+                }
+            }
+        }
+        exoPlayer.addListener(listener)
+        onDispose {
+            exoPlayer.removeListener(listener)
+            exoPlayer.release()
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .heightIn(max = 500.dp)
+            .aspectRatio(videoAspectRatio)
+            .onGloballyPositioned { coordinates ->
+                val bounds = coordinates.boundsInWindow()
+                val viewHeight = view.height.toFloat()
+                val visibleTop = bounds.top.coerceAtLeast(0f)
+                val visibleBottom = bounds.bottom.coerceAtMost(viewHeight)
+                val visibleHeight = (visibleBottom - visibleTop).coerceAtLeast(0f)
+                val totalHeight = bounds.height
+                val visibleFraction = if (totalHeight > 0) visibleHeight / totalHeight else 0f
+                if (visibleFraction > 0.5f) {
+                    if (mediaSettings.videoAutoPlay && !exoPlayer.isPlaying && !userPaused) exoPlayer.play()
+                } else {
+                    if (exoPlayer.isPlaying) exoPlayer.pause()
+                    userPaused = false
+                }
+            }
+    ) {
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    player = exoPlayer
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    useController = true
+                    controllerAutoShow = false
+                    controllerShowTimeoutMs = 2000
+                    setControllerVisibilityListener(
+                        PlayerView.ControllerVisibilityListener { visibility ->
+                            showControls = visibility == android.view.View.VISIBLE
+                        }
+                    )
+                    hideController()
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+        AnimatedVisibility(
+            visible = showControls,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopEnd)
+        ) {
+            IconButton(
+                onClick = { globalMuted.value = !isMuted },
+                colors = IconButtonDefaults.iconButtonColors(
+                    containerColor = Color.Black.copy(alpha = 0.5f),
+                    contentColor = Color.White
+                ),
+                modifier = Modifier
+                    .padding(8.dp)
+                    .size(36.dp)
+            ) {
+                Icon(
+                    imageVector = if (isMuted) Icons.AutoMirrored.Filled.VolumeOff
+                        else Icons.AutoMirrored.Filled.VolumeUp,
+                    contentDescription = if (isMuted) "Unmute" else "Mute"
+                )
+            }
+        }
+    }
 }
 
 // --- Link Preview (OG tags) ---

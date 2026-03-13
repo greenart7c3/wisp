@@ -43,11 +43,16 @@ object HttpClientFactory {
             .connectTimeout(connectTimeout, TimeUnit.SECONDS)
             .pingInterval(30, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
-            .addNetworkInterceptor { chain ->
-                val response = chain.proceed(chain.request())
-                response.newBuilder()
+            // Strip permessage-deflate from the REQUEST so the server never negotiates
+            // compression. The previous approach (network interceptor stripping the
+            // response header) left the request header intact — servers that support
+            // deflate would negotiate it, then send compressed frames to a client with
+            // no inflater, causing ProtocolException and a reconnect loop.
+            .addInterceptor { chain ->
+                val request = chain.request().newBuilder()
                     .removeHeader("Sec-WebSocket-Extensions")
                     .build()
+                chain.proceed(request)
             }
 
         if (isTor) {
@@ -80,6 +85,19 @@ object HttpClientFactory {
         return ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
             .build()
+    }
+
+    fun safeShutdownClient(client: OkHttpClient) {
+        client.dispatcher.cancelAll()
+        client.connectionPool.evictAll()
+        client.dispatcher.executorService.shutdown()
+        try {
+            if (!client.dispatcher.executorService.awaitTermination(2, TimeUnit.SECONDS)) {
+                client.dispatcher.executorService.shutdownNow()
+            }
+        } catch (_: InterruptedException) {
+            client.dispatcher.executorService.shutdownNow()
+        }
     }
 
     fun createHttpClient(

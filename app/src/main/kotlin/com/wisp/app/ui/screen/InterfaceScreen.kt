@@ -65,6 +65,9 @@ fun InterfaceScreen(
 ) {
     var isLargeText by remember { mutableStateOf(interfacePrefs.isLargeText()) }
     var newNotesHidden by remember { mutableStateOf(interfacePrefs.isNewNotesButtonHidden()) }
+    var clientTagEnabled by remember { mutableStateOf(interfacePrefs.isClientTagEnabled()) }
+    var autoLoadMedia by remember { mutableStateOf(interfacePrefs.isAutoLoadMedia()) }
+    var videoAutoPlay by remember { mutableStateOf(interfacePrefs.isVideoAutoPlay()) }
     var selectedTheme by remember { mutableStateOf(interfacePrefs.getTheme()) }
     var isCustomTheme by remember { mutableStateOf(selectedTheme == "custom") }
 
@@ -274,6 +277,89 @@ fun InterfaceScreen(
                         newNotesHidden = it
                         interfacePrefs.setNewNotesButtonHidden(it)
                         onChanged()
+                    }
+                )
+            }
+
+            Spacer(Modifier.height(24.dp))
+
+            // Media section
+            Text(
+                text = "Media",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Auto-load media", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Automatically download images and videos in notes. When off, tap to load.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = autoLoadMedia,
+                    onCheckedChange = {
+                        autoLoadMedia = it
+                        interfacePrefs.setAutoLoadMedia(it)
+                        onChanged()
+                    }
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Video autoplay", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Automatically play videos when they scroll into view",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = videoAutoPlay,
+                    onCheckedChange = {
+                        videoAutoPlay = it
+                        interfacePrefs.setVideoAutoPlay(it)
+                        onChanged()
+                    }
+                )
+            }
+
+            Spacer(Modifier.height(24.dp))
+
+            // Client Tag section
+            Text(
+                text = "Client Tag",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Tag notes with Wisp", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Include a tag identifying Wisp as the client. This is visible to others.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = clientTagEnabled,
+                    onCheckedChange = {
+                        clientTagEnabled = it
+                        interfacePrefs.setClientTagEnabled(it)
                     }
                 )
             }

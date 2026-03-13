@@ -16,4 +16,13 @@ class InterfacePreferences(context: Context) {
 
     fun getTheme(): String = prefs.getString("theme", "custom") ?: "custom"
     fun setTheme(theme: String) = prefs.edit().putString("theme", theme).apply()
+
+    fun isClientTagEnabled(): Boolean = prefs.getBoolean("client_tag_enabled", true)
+    fun setClientTagEnabled(enabled: Boolean) = prefs.edit().putBoolean("client_tag_enabled", enabled).apply()
+
+    fun isAutoLoadMedia(): Boolean = prefs.getBoolean("auto_load_media", true)
+    fun setAutoLoadMedia(enabled: Boolean) = prefs.edit().putBoolean("auto_load_media", enabled).apply()
+
+    fun isVideoAutoPlay(): Boolean = prefs.getBoolean("video_auto_play", true)
+    fun setVideoAutoPlay(enabled: Boolean) = prefs.edit().putBoolean("video_auto_play", enabled).apply()
 }

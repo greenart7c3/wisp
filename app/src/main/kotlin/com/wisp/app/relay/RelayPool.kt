@@ -99,6 +99,9 @@ class RelayPool {
             // onAppResume handles reconnection.
             setReconnectEnabled(value)
         }
+    /** True while reconnectAll/forceReconnectAll is in progress — guards health tracker
+     *  from recording disconnect churn as real failures. */
+    @Volatile var isReconnecting = false
     var healthTracker: RelayHealthTracker? = null
 
     companion object {
@@ -132,7 +135,7 @@ class RelayPool {
 
     /** Subscription prefixes that bypass event deduplication. */
     private val dedupBypassPrefixes = java.util.concurrent.CopyOnWriteArrayList(
-        listOf("thread-", "user", "quote-", "editprofile", "notif", "dms")
+        listOf("thread-", "user", "quote-", "editprofile", "notif", "dms", "search-", "hashtag-")
     )
 
     /** Signing lambda for NIP-42 AUTH — set via [setAuthSigner]. */
@@ -397,20 +400,20 @@ class RelayPool {
             }
         }
         scope.launch(parentJob) {
-            relay.connectionErrors.collect { addConsoleEntry(it) }
+            relay.connectionErrors.collect { if (appIsActive) addConsoleEntry(it) }
         }
         scope.launch(parentJob) {
             relay.connectionState.collect { connected ->
-                Log.d("RLC", "[Pool] connectionState=$connected for ${relay.config.url} | relay.isConnected=${relay.isConnected} appIsActive=$appIsActive")
+                Log.d("RLC", "[Pool] connectionState=$connected for ${relay.config.url} | relay.isConnected=${relay.isConnected} appIsActive=$appIsActive isReconnecting=$isReconnecting")
                 updateConnectedCount()
                 if (connected) {
                     // Always resync regardless of appIsActive — relays that connect
                     // during the awaitAnyConnected window (before appIsActive=true)
                     // would otherwise miss their subscriptions entirely.
                     resyncSubscriptions(relay)
-                    if (appIsActive) healthTracker?.onRelayConnected(relay.config.url)
+                    if (appIsActive && !isReconnecting) healthTracker?.onRelayConnected(relay.config.url)
                 } else {
-                    if (appIsActive) healthTracker?.closeSession(relay.config.url)
+                    if (appIsActive && !isReconnecting) healthTracker?.closeSession(relay.config.url)
                     subscriptionTracker.untrackRelay(relay.config.url)
                 }
             }
@@ -816,8 +819,7 @@ class RelayPool {
 
     fun reconnectAll(): Int {
         Log.d("RLC", "[Pool] reconnectAll() START — persistent=${relays.size} dm=${dmRelays.size} ephemeral=${ephemeralRelays.size} activeSubs=${activeSubscriptions.size}")
-        appIsActive = false
-        healthTracker?.discardAllSessions()
+        isReconnecting = true
         // Clear all cooldowns — background failures shouldn't block reconnection
         relayCooldowns.clear()
         // Only keep long-lived subscriptions that won't be re-established by onReconnected.
@@ -826,18 +828,14 @@ class RelayPool {
         for (relayMap in activeSubscriptions.values) {
             relayMap.keys.retainAll { subId -> keepPrefixes.any { subId.startsWith(it) } }
         }
-        // Tear down and reconnect ALL persistent relays unconditionally.
-        // WebSockets can be stale (server-side timeout, NAT rebinding) while
-        // OkHttp hasn't detected it yet — subscriptions sent to zombie sockets
-        // are silently lost. Unlike forceReconnectAll(), we preserve
-        // activeSubscriptions and subscriptionTracker so resync replays them.
+        // Always tear down and reconnect — we cannot trust isConnected after
+        // an OS sleep; the socket may be dead even though the flag says true.
         for (relay in relays) {
             relay.resetBackoff()
             relay.disconnect()
             relay.connect()
             relay.reconnectEnabled = true
         }
-        // Tear down and reconnect ALL DM relays
         for (relay in dmRelays) {
             relay.resetBackoff()
             relay.disconnect()
@@ -855,10 +853,11 @@ class RelayPool {
         }
         ephemeralRelays.clear()
         ephemeralLastUsed.clear()
-        val count = relays.size + dmRelays.size
-        Log.d("RLC", "[Pool] reconnectAll() END — reconnecting $count relays, activeSubs remaining=${activeSubscriptions.size}")
+        isReconnecting = false
+        val total = relays.size + dmRelays.size
+        Log.d("RLC", "[Pool] reconnectAll() END — reconnected $total relays, activeSubs remaining=${activeSubscriptions.size}")
         updateConnectedCount()
-        return count
+        return total
     }
 
     /**
@@ -868,8 +867,7 @@ class RelayPool {
      */
     fun forceReconnectAll() {
         Log.d("RLC", "[Pool] forceReconnectAll() START — persistent=${relays.size} dm=${dmRelays.size} ephemeral=${ephemeralRelays.size}")
-        appIsActive = false
-        healthTracker?.closeAllSessions()
+        isReconnecting = true
         // Server-side subscriptions are dead — clear tracker so fresh REQs are sent
         subscriptionTracker.clear()
         activeSubscriptions.clear()
@@ -897,6 +895,7 @@ class RelayPool {
         }
         ephemeralRelays.clear()
         ephemeralLastUsed.clear()
+        isReconnecting = false
         Log.d("RLC", "[Pool] forceReconnectAll() END — all subs/trackers cleared")
         updateConnectedCount()
     }
@@ -953,6 +952,27 @@ class RelayPool {
         for (url in expiredCooldowns) {
             relayCooldowns.remove(url)
         }
+    }
+
+    /**
+     * Pre-connect an ephemeral relay without sending a message. Use this to start
+     * the WebSocket connection early so it's ready when the first REQ arrives.
+     */
+    fun preConnectEphemeral(url: String) {
+        ensureClientCurrent()
+        if (url in blockedUrls) return
+        if (!RelayConfig.isConnectableUrl(url)) return
+        if (ephemeralRelays.containsKey(url)) return
+        if (ephemeralRelays.size >= MAX_EPHEMERAL) return
+        val relay = Relay(RelayConfig(url, read = true, write = false), client, scope)
+        relay.autoReconnect = false
+        wireByteTracking(relay)
+        relayIndex[url] = relay
+        collectMessages(relay)
+        ephemeralRelays[url] = relay
+        ephemeralLastUsed[url] = System.currentTimeMillis()
+        relay.connect()
+        Log.d("RLC", "[Pool] preConnectEphemeral($url)")
     }
 
     fun disconnectRelay(url: String) {
@@ -1020,11 +1040,13 @@ class RelayPool {
         val dmUrls = allDmUrls ?: dmRelays.map { it.config.url }.toList()
         Log.d("RLC", "[Pool] swapClientAndReconnect — persistent=${configs.size} dm=${dmUrls.size}")
 
+        val oldClient = client
         disconnectAll()
         client = HttpClientFactory.createRelayClient()
         clientBuiltWithTor = TorManager.isEnabled()
         updateRelays(configs)
         updateDmRelays(dmUrls)
+        scope.launch { HttpClientFactory.safeShutdownClient(oldClient) }
     }
 
     fun disconnectAll() {

@@ -12,9 +12,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import com.wisp.app.repo.InterfacePreferences
+import com.wisp.app.ui.component.LocalMediaSettings
+import com.wisp.app.ui.component.MediaSettings
 import com.wisp.app.ui.theme.WispTheme
 
 class MainActivity : FragmentActivity() {
@@ -29,6 +32,12 @@ class MainActivity : FragmentActivity() {
             var accentColor by remember { mutableStateOf(Color(interfacePrefs.getAccentColor())) }
             var isLargeText by remember { mutableStateOf(interfacePrefs.isLargeText()) }
             var themeName by remember { mutableStateOf(interfacePrefs.getTheme()) }
+            var mediaSettings by remember {
+                mutableStateOf(MediaSettings(
+                    autoLoadMedia = interfacePrefs.isAutoLoadMedia(),
+                    videoAutoPlay = interfacePrefs.isVideoAutoPlay()
+                ))
+            }
 
             LaunchedEffect(isDarkTheme) {
                 enableEdgeToEdge(
@@ -46,20 +55,26 @@ class MainActivity : FragmentActivity() {
             }
 
             WispTheme(isDarkTheme = isDarkTheme, accentColor = accentColor, isLargeText = isLargeText, themeName = themeName) {
-                WispNavHost(
-                    isDarkTheme = isDarkTheme,
-                    onToggleTheme = {
-                        isDarkTheme = !isDarkTheme
-                        prefs.edit().putBoolean("dark_theme", isDarkTheme).apply()
-                    },
-                    accentColor = accentColor,
-                    isLargeText = isLargeText,
-                    onInterfaceChanged = {
-                        accentColor = Color(interfacePrefs.getAccentColor())
-                        isLargeText = interfacePrefs.isLargeText()
-                        themeName = interfacePrefs.getTheme()
-                    }
-                )
+                CompositionLocalProvider(LocalMediaSettings provides mediaSettings) {
+                    WispNavHost(
+                        isDarkTheme = isDarkTheme,
+                        onToggleTheme = {
+                            isDarkTheme = !isDarkTheme
+                            prefs.edit().putBoolean("dark_theme", isDarkTheme).apply()
+                        },
+                        accentColor = accentColor,
+                        isLargeText = isLargeText,
+                        onInterfaceChanged = {
+                            accentColor = Color(interfacePrefs.getAccentColor())
+                            isLargeText = interfacePrefs.isLargeText()
+                            themeName = interfacePrefs.getTheme()
+                            mediaSettings = MediaSettings(
+                                autoLoadMedia = interfacePrefs.isAutoLoadMedia(),
+                                videoAutoPlay = interfacePrefs.isVideoAutoPlay()
+                            )
+                        }
+                    )
+                }
             }
         }
     }
