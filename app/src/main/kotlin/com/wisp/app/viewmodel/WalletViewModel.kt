@@ -579,7 +579,7 @@ class WalletViewModel(
     }
 
     fun deleteWallet() {
-        if (_deleteConfirmText.value != "DELETE") return
+        if (_walletMode.value == WalletMode.SPARK && _deleteConfirmText.value != "DELETE") return
 
         connectJob?.cancel()
         statusCollectJob?.cancel()

@@ -411,6 +411,7 @@ fun WalletScreen(
                         onConfirmTextChange = { viewModel.updateDeleteConfirmText(it) },
                         onDelete = { viewModel.deleteWallet() },
                         onCancel = { viewModel.navigateBack() },
+                        walletMode = viewModel.walletMode.collectAsState().value,
                         modifier = Modifier.padding(padding)
                     )
                     is WalletPage.BackupToRelay -> BackupToRelayContent(
@@ -2526,16 +2527,7 @@ private fun WalletSettingsContent(
             )
         }
 
-        // Danger Zone
         Spacer(Modifier.height(32.dp))
-
-        Text(
-            "Danger Zone",
-            style = MaterialTheme.typography.titleMedium,
-            color = Color(0xFFD32F2F)
-        )
-
-        Spacer(Modifier.height(12.dp))
 
         Button(
             onClick = onDeleteWallet,
@@ -2545,7 +2537,7 @@ private fun WalletSettingsContent(
                 contentColor = Color.White
             )
         ) {
-            Text("Delete Wallet")
+            Text(if (walletMode == WalletMode.NWC) "Disconnect" else "Delete Wallet")
         }
 
         // Footer
@@ -2865,8 +2857,11 @@ private fun DeleteWalletConfirmContent(
     onConfirmTextChange: (String) -> Unit,
     onDelete: () -> Unit,
     onCancel: () -> Unit,
+    walletMode: WalletMode = WalletMode.SPARK,
     modifier: Modifier = Modifier
 ) {
+    val isNwc = walletMode == WalletMode.NWC
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -2889,7 +2884,7 @@ private fun DeleteWalletConfirmContent(
         Spacer(Modifier.height(24.dp))
 
         Text(
-            "Delete Wallet",
+            if (isNwc) "Disconnect NWC" else "Delete Wallet",
             style = MaterialTheme.typography.headlineMedium,
             color = Color(0xFFD32F2F)
         )
@@ -2897,43 +2892,46 @@ private fun DeleteWalletConfirmContent(
         Spacer(Modifier.height(16.dp))
 
         Text(
-            "This will permanently delete your wallet from this device. Your funds cannot be recovered without your recovery phrase.",
+            if (isNwc) "This will remove the NWC connection string from this device. You can reconnect anytime with a new connection string."
+            else "This will permanently delete your wallet from this device. Your funds cannot be recovered without your recovery phrase.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
 
-        Spacer(Modifier.height(8.dp))
+        if (!isNwc) {
+            Spacer(Modifier.height(8.dp))
 
-        Text(
-            "Make sure you have backed up your recovery phrase before proceeding.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = Color(0xFFD32F2F),
-            textAlign = TextAlign.Center
-        )
+            Text(
+                "Make sure you have backed up your recovery phrase before proceeding.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color(0xFFD32F2F),
+                textAlign = TextAlign.Center
+            )
 
-        Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(24.dp))
 
-        OutlinedTextField(
-            value = confirmText,
-            onValueChange = onConfirmTextChange,
-            label = { Text("Type DELETE to confirm") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
+            OutlinedTextField(
+                value = confirmText,
+                onValueChange = onConfirmTextChange,
+                label = { Text("Type DELETE to confirm") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+        }
 
         Spacer(Modifier.height(24.dp))
 
         Button(
             onClick = onDelete,
             modifier = Modifier.fillMaxWidth(),
-            enabled = confirmText == "DELETE",
+            enabled = isNwc || confirmText == "DELETE",
             colors = ButtonDefaults.buttonColors(
                 containerColor = Color(0xFFD32F2F),
                 contentColor = Color.White
             )
         ) {
-            Text("Delete Wallet")
+            Text(if (isNwc) "Disconnect" else "Delete Wallet")
         }
 
         Spacer(Modifier.height(12.dp))
