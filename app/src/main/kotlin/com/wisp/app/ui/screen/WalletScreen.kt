@@ -35,6 +35,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -218,6 +219,7 @@ fun WalletScreen(
                                     viewModel.navigateTo(WalletPage.RestoreFromRelay)
                                 },
                                 onRestoreFromAutoCheck = { viewModel.restoreFromAutoCheck() },
+                                onSelectAutoCheckBackup = { viewModel.selectAutoCheckBackup(it) },
                                 onDismissAutoCheck = { viewModel.dismissAutoCheck() },
                                 isLoggedIn = viewModel.keyRepo.isLoggedIn(),
                                 onDisconnect = { viewModel.disconnectWallet() }
@@ -727,8 +729,9 @@ private fun WalletHomeContent(
                     .fillMaxWidth()
                     .clickable { onSetupAddress() },
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
+                    containerColor = MaterialTheme.colorScheme.surface
+                ),
+                border = BorderStroke(1.dp, Color(0xFFE6A040))
             ) {
                 Row(
                     modifier = Modifier
@@ -739,7 +742,7 @@ private fun WalletHomeContent(
                     Icon(
                         Icons.Default.ElectricBolt,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        tint = Color(0xFFE6A040),
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(Modifier.width(12.dp))
@@ -747,12 +750,12 @@ private fun WalletHomeContent(
                         Text(
                             "Set up your Lightning Address",
                             style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
                             "Get a username@breez.tips address",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -1905,20 +1908,21 @@ private fun WalletModeSelectionContent(
             .fillMaxWidth()
             .clickable { onSelectSpark() },
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer
-        )
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = BorderStroke(1.dp, Color(0xFFE6A040))
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
                 "Spark Wallet",
                 style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
+                color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(Modifier.height(4.dp))
             Text(
                 "Non-custodial Lightning wallet built into the app. No external wallet needed.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -1965,6 +1969,7 @@ private fun SparkSetupContent(
     onRestoreWallet: () -> Unit,
     onRestoreFromRelay: () -> Unit = {},
     onRestoreFromAutoCheck: () -> Unit = {},
+    onSelectAutoCheckBackup: (BackupEntry) -> Unit = {},
     onDismissAutoCheck: () -> Unit = {},
     isLoggedIn: Boolean = false,
     onDisconnect: () -> Unit
@@ -2017,39 +2022,41 @@ private fun SparkSetupContent(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
+                    containerColor = Color(0xFF68D391).copy(alpha = 0.12f)
+                ),
+                border = BorderStroke(1.dp, Color(0xFF68D391).copy(alpha = 0.4f))
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
                         "Existing wallet found",
                         style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                        color = Color(0xFF68D391)
                     )
                     Spacer(Modifier.height(4.dp))
                     val words = autoCheckState.mnemonic.split(" ")
                     Text(
                         "${words.size}-word recovery phrase",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
                     )
                     if (autoCheckState.walletId != null) {
                         Text(
                             "Wallet ID: ${autoCheckState.walletId}",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     val dateFormat = java.text.SimpleDateFormat("MMM d, yyyy 'at' h:mm a", java.util.Locale.getDefault())
                     Text(
                         "Saved: ${dateFormat.format(java.util.Date(autoCheckState.createdAt * 1000))}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(12.dp))
                     Button(
                         onClick = onRestoreFromAutoCheck,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE6A040))
                     ) {
                         Text("Restore This Wallet")
                     }
@@ -2064,10 +2071,64 @@ private fun SparkSetupContent(
             }
             Spacer(Modifier.height(16.dp))
         }
+        is AutoCheckState.MultipleFound -> {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "Multiple wallets found",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Choose a backup to restore:",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    val dateFormat = java.text.SimpleDateFormat("MMM d, yyyy 'at' h:mm a", java.util.Locale.getDefault())
+                    autoCheckState.backups.forEach { entry ->
+                        Card(
+                            onClick = { onSelectAutoCheckBackup(entry) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = BorderStroke(1.dp, Color(0xFFE6A040))
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text(
+                                    if (entry.walletId != null) "Wallet ${entry.walletId}" else "Spark wallet",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    dateFormat.format(java.util.Date(entry.createdAt * 1000)),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    OutlinedButton(
+                        onClick = onDismissAutoCheck,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Create New Wallet")
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
         else -> {} // Idle or NotFound — show normal UI below
     }
 
-    if (!isConnecting && autoCheckState !is AutoCheckState.Found) {
+    if (!isConnecting && autoCheckState !is AutoCheckState.Found && autoCheckState !is AutoCheckState.MultipleFound) {
         Button(
             onClick = onCreateWallet,
             modifier = Modifier.fillMaxWidth()
@@ -3268,16 +3329,18 @@ private fun RestoreFromRelayContent(
 
                 val dateFormat = java.text.SimpleDateFormat("MMM d, yyyy 'at' h:mm a", java.util.Locale.getDefault())
                 status.backups.forEach { entry ->
-                    OutlinedButton(
+                    Card(
                         onClick = { onSelectBackup(entry) },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
-                        contentPadding = PaddingValues(16.dp)
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, Color(0xFFE6A040))
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
+                        Column(modifier = Modifier.padding(16.dp)) {
                             Text(
                                 if (entry.walletId != null) "Wallet ${entry.walletId}" else "Spark wallet",
-                                style = MaterialTheme.typography.bodyMedium
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
                                 dateFormat.format(java.util.Date(entry.createdAt * 1000)),

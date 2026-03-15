@@ -549,6 +549,31 @@ class RelayPool {
         return final
     }
 
+    /** Ensure all persistent relays are connected, reconnecting any that are down. */
+    suspend fun ensureAllRelaysConnected(timeoutMs: Long = 5000): Int {
+        val disconnected = relays.filter { !it.isConnected }
+        if (disconnected.isEmpty()) return relays.size
+
+        Log.d("RLC", "[Pool] ensureAllRelaysConnected — ${relays.size - disconnected.size}/${relays.size} connected, reconnecting ${disconnected.size}")
+        for (relay in disconnected) {
+            relay.resetBackoff()
+            relay.connect()
+        }
+
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val connected = relays.count { it.isConnected }
+            if (connected >= relays.size) {
+                Log.d("RLC", "[Pool] ensureAllRelaysConnected — all $connected relay(s) connected")
+                return connected
+            }
+            delay(200)
+        }
+        val final = relays.count { it.isConnected }
+        Log.d("RLC", "[Pool] ensureAllRelaysConnected — timed out, $final/${relays.size} connected")
+        return final
+    }
+
     /**
      * Start tracking OK responses for a published event.
      * Updates [broadcastState] as relays respond, then auto-clears after all respond or timeout.

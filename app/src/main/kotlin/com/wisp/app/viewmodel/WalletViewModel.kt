@@ -78,6 +78,7 @@ sealed class AutoCheckState {
     object Idle : AutoCheckState()
     object Checking : AutoCheckState()
     data class Found(val mnemonic: String, val walletId: String?, val createdAt: Long) : AutoCheckState()
+    data class MultipleFound(val backups: List<BackupEntry>) : AutoCheckState()
     object NotFound : AutoCheckState()
 }
 
@@ -358,14 +359,14 @@ class WalletViewModel(
         _autoCheckState.value = AutoCheckState.Checking
         viewModelScope.launch {
             try {
+                relayPool.ensureAllRelaysConnected()
                 val pubkey = signer.pubkeyHex
                 val ts = System.currentTimeMillis()
                 val subId = "auto-check-$ts"
                 val filter = Nip78.backupFilter(pubkey)
                 val events = mutableListOf<NostrEvent>()
                 var eoseCount = 0
-                val relayCount = relayPool.connectedCount.value
-                Log.d("WalletVM", "autoCheck: connected=$relayCount read=${relayPool.getReadRelayUrls().size} all=${relayPool.getRelayUrls().size}")
+                Log.d("WalletVM", "autoCheck: connected=${relayPool.connectedCount.value} all=${relayPool.getRelayUrls().size}")
                 val collectJob = launch {
                     relayPool.relayEvents.collect { relayEvent: RelayEvent ->
                         if (relayEvent.subscriptionId == subId) {
@@ -397,38 +398,57 @@ class WalletViewModel(
                 eoseJob.cancel()
                 relayPool.closeOnAllRelays(subId)
 
-                // Filter to spark-wallet-backup events only
+                // Filter to spark-wallet-backup events only, group by d-tag
                 val sparkEvents = events.filter { event ->
                     val dTag = Nip78.extractDTag(event)
-                    dTag != null && dTag.startsWith("spark-wallet-backup")
+                    dTag != null && dTag.startsWith("spark-wallet-backup") && !Nip78.isDeletedBackup(event)
                 }
-                Log.d("WalletVM", "autoCheck: ${sparkEvents.size} spark events out of ${events.size} total")
+                Log.d("WalletVM", "autoCheck: ${sparkEvents.size} valid spark events out of ${events.size} total")
 
-                val best = sparkEvents
-                    .filter { !Nip78.isDeletedBackup(it) }
-                    .sortedByDescending { it.created_at }
-                    .firstOrNull()
+                val newestPerWallet = sparkEvents
+                    .groupBy { Nip78.extractDTag(it) }
+                    .mapValues { (_, evts) -> evts.maxByOrNull { it.created_at }!! }
+                    .values.sortedByDescending { it.created_at }
 
-                if (best == null) {
-                    Log.d("WalletVM", "autoCheck: no valid spark backup (${sparkEvents.size} spark, ${sparkEvents.count { Nip78.isDeletedBackup(it) }} deleted)")
+                if (newestPerWallet.isEmpty()) {
+                    Log.d("WalletVM", "autoCheck: no valid spark backup")
                     _autoCheckState.value = AutoCheckState.NotFound
                     return@launch
                 }
 
-                Log.d("WalletVM", "autoCheck: best d=${Nip78.extractDTag(best)} content=${best.content.length} chars created=${best.created_at}")
-                val mnemonic = withContext(Dispatchers.Default) {
-                    Nip78.decryptBackup(signer, best)
+                val decrypted = withContext(Dispatchers.Default) {
+                    newestPerWallet.mapNotNull { event ->
+                        val mnemonic = Nip78.decryptBackup(signer, event)
+                        if (mnemonic != null) {
+                            BackupEntry(
+                                mnemonic = mnemonic,
+                                walletId = Nip78.extractWalletId(event),
+                                createdAt = event.created_at
+                            )
+                        } else {
+                            Log.d("WalletVM", "autoCheck: decrypt FAILED for d=${Nip78.extractDTag(event)}")
+                            null
+                        }
+                    }
                 }
-                if (mnemonic != null) {
-                    Log.d("WalletVM", "autoCheck: decrypt success, ${mnemonic.split(" ").size} words")
-                    _autoCheckState.value = AutoCheckState.Found(
-                        mnemonic = mnemonic,
-                        walletId = Nip78.extractWalletId(best),
-                        createdAt = best.created_at
-                    )
-                } else {
-                    Log.d("WalletVM", "autoCheck: decrypt FAILED for d=${Nip78.extractDTag(best)} content=${best.content.take(50)}...")
-                    _autoCheckState.value = AutoCheckState.NotFound
+
+                when {
+                    decrypted.isEmpty() -> {
+                        _autoCheckState.value = AutoCheckState.NotFound
+                    }
+                    decrypted.size == 1 -> {
+                        val entry = decrypted.first()
+                        Log.d("WalletVM", "autoCheck: single wallet found, ${entry.mnemonic.split(" ").size} words")
+                        _autoCheckState.value = AutoCheckState.Found(
+                            mnemonic = entry.mnemonic,
+                            walletId = entry.walletId,
+                            createdAt = entry.createdAt
+                        )
+                    }
+                    else -> {
+                        Log.d("WalletVM", "autoCheck: ${decrypted.size} wallets found")
+                        _autoCheckState.value = AutoCheckState.MultipleFound(decrypted)
+                    }
                 }
             } catch (_: Exception) {
                 _autoCheckState.value = AutoCheckState.NotFound
@@ -438,9 +458,18 @@ class WalletViewModel(
 
     fun restoreFromAutoCheck() {
         val state = _autoCheckState.value
-        if (state !is AutoCheckState.Found) return
-        _autoCheckState.value = AutoCheckState.Idle
-        restoreSparkWallet(state.mnemonic)
+        if (state is AutoCheckState.Found) {
+            _autoCheckState.value = AutoCheckState.Idle
+            restoreSparkWallet(state.mnemonic)
+        }
+    }
+
+    fun selectAutoCheckBackup(entry: BackupEntry) {
+        _autoCheckState.value = AutoCheckState.Found(
+            mnemonic = entry.mnemonic,
+            walletId = entry.walletId,
+            createdAt = entry.createdAt
+        )
     }
 
     fun dismissAutoCheck() {
@@ -490,11 +519,14 @@ class WalletViewModel(
 
     fun restoreSparkWallet(mnemonic: String = _restoreMnemonic.value) {
         val trimmed = mnemonic.trim().lowercase()
+        Log.d("WalletVM", "restoreSparkWallet: validating ${trimmed.split(" ").size} words")
         val validationError = sparkRepo.validateMnemonic(trimmed)
         if (validationError != null) {
+            Log.e("WalletVM", "restoreSparkWallet: validation failed: $validationError")
             _sendError.value = validationError
             return
         }
+        Log.d("WalletVM", "restoreSparkWallet: saving and connecting")
         sparkRepo.saveMnemonic(trimmed)
         connectSparkWallet()
     }
@@ -1184,6 +1216,7 @@ class WalletViewModel(
         _backupStatus.value = BackupStatus.InProgress
         viewModelScope.launch {
             try {
+                relayPool.ensureWriteRelaysConnected()
                 val event = withContext(Dispatchers.Default) {
                     Nip78.createBackupEvent(signer, mnemonic)
                 }
@@ -1216,6 +1249,7 @@ class WalletViewModel(
         _restoreFromRelayStatus.value = RestoreFromRelayStatus.Searching
         viewModelScope.launch {
             try {
+                relayPool.ensureAllRelaysConnected()
                 val pubkey = signer.pubkeyHex
                 val ts = System.currentTimeMillis()
                 val subId = "wallet-backup-$ts"
@@ -1319,7 +1353,9 @@ class WalletViewModel(
 
     fun restoreFromRelayBackup() {
         val status = _restoreFromRelayStatus.value
+        Log.d("WalletVM", "restoreFromRelayBackup: status=${status::class.simpleName}")
         if (status !is RestoreFromRelayStatus.Found) return
+        Log.d("WalletVM", "restoreFromRelayBackup: restoring wallet ${status.walletId}, ${status.mnemonic.split(" ").size} words")
         restoreSparkWallet(status.mnemonic)
     }
 
@@ -1344,6 +1380,7 @@ class WalletViewModel(
         _relayBackupCheckLoading.value = true
         viewModelScope.launch {
             try {
+                relayPool.ensureAllRelaysConnected()
                 val relayUrls = relayPool.getRelayUrls()
                 val filter = Nip78.backupFilterForDTag(pubkey, mnemonic)
                 val ts = System.currentTimeMillis()
