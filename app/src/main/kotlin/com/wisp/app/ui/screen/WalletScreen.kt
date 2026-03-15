@@ -68,6 +68,7 @@ import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -2401,7 +2402,7 @@ private fun WalletSettingsContent(
                 onClick = onBackupToRelay,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("Backup to Nostr Relays")
             }
