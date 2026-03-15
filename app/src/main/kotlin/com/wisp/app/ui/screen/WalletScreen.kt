@@ -119,6 +119,7 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
+import com.wisp.app.BuildConfig
 import com.wisp.app.R
 import com.wisp.app.repo.WalletMode
 import com.wisp.app.repo.WalletTransaction
@@ -2603,7 +2604,7 @@ private fun WalletSettingsContent(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "SDK v0.10.0",
+                    "SDK v${BuildConfig.BREEZ_SDK_VERSION}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

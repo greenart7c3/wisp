@@ -30,6 +30,7 @@ android {
             props.getProperty("breez.api.key", "")
         } else ""
         buildConfigField("String", "BREEZ_API_KEY", "\"$breezApiKey\"")
+        buildConfigField("String", "BREEZ_SDK_VERSION", "\"${libs.versions.breez.sdk.spark.get()}\"")
     }
 
     buildTypes {
