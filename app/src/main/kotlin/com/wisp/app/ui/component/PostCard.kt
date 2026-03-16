@@ -39,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -842,21 +843,37 @@ private fun PollResultRow(
     count: Int,
     isUserChoice: Boolean
 ) {
+    val animatedFraction by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = percentage.coerceIn(0f, 1f),
+        animationSpec = androidx.compose.animation.core.tween(durationMillis = 600),
+        label = "pollBar"
+    )
+    val barColor = if (isUserChoice)
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+    else
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+    val borderColor = if (isUserChoice)
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+    else
+        MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
+            .border(
+                width = 1.dp,
+                color = borderColor,
+                shape = RoundedCornerShape(8.dp)
+            )
+            .clip(RoundedCornerShape(8.dp))
     ) {
-        // Background bar
+        // Filled bar background
         Box(
             modifier = Modifier
-                .fillMaxWidth(fraction = percentage)
+                .fillMaxWidth(fraction = animatedFraction)
                 .matchParentSize()
-                .background(
-                    color = if (isUserChoice) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
-                           else MaterialTheme.colorScheme.surfaceVariant,
-                    shape = RoundedCornerShape(8.dp)
-                )
+                .background(color = barColor)
         )
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -878,7 +895,7 @@ private fun PollResultRow(
                 modifier = Modifier.weight(1f)
             )
             Text(
-                text = "${(percentage * 100).toInt()}% ($count)",
+                text = "${(percentage * 100).toInt()}%",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
