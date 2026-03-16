@@ -431,7 +431,8 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                 _publishing.value = false
                 return 0
             }
-            tags.addAll(Nip88.buildPollTags(nonBlankOptions, _pollType.value))
+            val pollRelays = relayPool.getWriteRelayUrls()
+            tags.addAll(Nip88.buildPollTags(nonBlankOptions, _pollType.value, relayUrls = pollRelays))
             eventKind = Nip88.KIND_POLL
         } else {
             eventKind = 1

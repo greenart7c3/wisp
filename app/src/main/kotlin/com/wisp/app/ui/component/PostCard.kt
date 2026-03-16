@@ -39,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -842,21 +843,30 @@ private fun PollResultRow(
     count: Int,
     isUserChoice: Boolean
 ) {
+    val animatedFraction by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = percentage.coerceIn(0f, 1f),
+        animationSpec = androidx.compose.animation.core.tween(durationMillis = 600),
+        label = "pollBar"
+    )
+    val barColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+
+    val fillHeight = remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val density = LocalDensity.current
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+            .onGloballyPositioned { fillHeight.intValue = it.size.height }
     ) {
-        // Background bar
+        // Filled bar — primary color for all options
         Box(
             modifier = Modifier
-                .fillMaxWidth(fraction = percentage)
-                .matchParentSize()
-                .background(
-                    color = if (isUserChoice) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
-                           else MaterialTheme.colorScheme.surfaceVariant,
-                    shape = RoundedCornerShape(8.dp)
-                )
+                .fillMaxWidth(fraction = if (animatedFraction > 0f) animatedFraction else 0.001f)
+                .height(with(density) { fillHeight.intValue.toDp() })
+                .background(color = barColor)
         )
         Row(
             verticalAlignment = Alignment.CenterVertically,

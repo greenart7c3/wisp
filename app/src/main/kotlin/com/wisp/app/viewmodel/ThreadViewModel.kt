@@ -152,7 +152,7 @@ class ThreadViewModel : ViewModel() {
             relayPool.relayEvents.collect { (event, _, subscriptionId) ->
                 if (!subscriptionId.startsWith("thread-reactions")) return@collect
                 when (event.kind) {
-                    7, 6 -> eventRepo.addEvent(event)
+                    7, 6, 1018 -> eventRepo.addEvent(event)
                     9735 -> {
                         eventRepo.addEvent(event)
                         val zapperPubkey = com.wisp.app.nostr.Nip57.getZapperPubkey(event)
@@ -270,7 +270,7 @@ class ThreadViewModel : ViewModel() {
         // Phase 1: Root note engagement (high priority) — await EOSE for reliable counts
         val rootSubId = "thread-reactions"
         activeMetadataSubs.add(rootSubId)
-        val rootFilter = Filter(kinds = listOf(7, 6, 9735), eTags = listOf(rootId))
+        val rootFilter = Filter(kinds = listOf(7, 6, 1018, 9735), eTags = listOf(rootId))
         sendToEngagementRelays(relayPool, rootSubId, rootFilter, rootAuthorPubkey)
         subManager.awaitEoseWithTimeout(rootSubId, 3_500)
 
@@ -280,7 +280,7 @@ class ThreadViewModel : ViewModel() {
             replyIds.chunked(50).forEachIndexed { index, batch ->
                 val subId = "thread-reactions-${index + 1}"
                 activeMetadataSubs.add(subId)
-                val filter = Filter(kinds = listOf(7, 6, 9735), eTags = batch)
+                val filter = Filter(kinds = listOf(7, 6, 1018, 9735), eTags = batch)
                 sendToEngagementRelays(relayPool, subId, filter, rootAuthorPubkey)
             }
         }
@@ -306,7 +306,7 @@ class ThreadViewModel : ViewModel() {
                 metadataBatchIndex++
                 val subId = "thread-reactions-b$metadataBatchIndex"
                 activeMetadataSubs.add(subId)
-                val filter = Filter(kinds = listOf(7, 6, 9735), eTags = batch)
+                val filter = Filter(kinds = listOf(7, 6, 1018, 9735), eTags = batch)
                 sendToEngagementRelays(relayPool, subId, filter, _rootEvent.value?.pubkey)
             }
         }

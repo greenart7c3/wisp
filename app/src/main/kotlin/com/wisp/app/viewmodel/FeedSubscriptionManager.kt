@@ -21,6 +21,7 @@ import com.wisp.app.repo.MetadataFetcher
 import com.wisp.app.repo.NotificationRepository
 import com.wisp.app.repo.ProfileRepository
 import com.wisp.app.nostr.Nip57
+import com.wisp.app.nostr.Nip88
 import com.wisp.app.nostr.RelaySet
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -111,6 +112,7 @@ class FeedSubscriptionManager(
     var relayFeedSubId = "relay-feed"
         private set
     val activeEngagementSubIds = java.util.concurrent.CopyOnWriteArrayList<String>()
+    private var pollVoteCollectorJob: Job? = null
     private var feedEoseJob: Job? = null
     private var relayFeedEoseJob: Job? = null
     private var relayStatusMonitorJob: Job? = null
@@ -892,6 +894,49 @@ class FeedSubscriptionManager(
                 activeEngagementSubIds.add(dmSubId)
                 val zapFilter = Filter(kinds = listOf(9735), eTags = myEventIds)
                 relayPool.sendToDmRelays(ClientMessage.req(dmSubId, zapFilter))
+            }
+        }
+
+        // Subscribe for poll vote responses: cast a wide net since voters
+        // publish to their own write relays which could be anywhere.
+        val pollEvents = feedEvents.filter { it.kind == Nip88.KIND_POLL }
+        Log.d("POLL", "[FeedSub] subscribeEngagement: ${feedEvents.size} feed events, ${pollEvents.size} polls")
+        pollVoteCollectorJob?.cancel()
+        if (pollEvents.isNotEmpty()) {
+            val pollEventIds = pollEvents.map { it.id }
+            Log.d("POLL", "[FeedSub] subscribing poll votes for ${pollEventIds.map { it.take(12) }}")
+            val pollSubId = "engage-poll-votes"
+            activeEngagementSubIds.add(pollSubId)
+            val pollFilters = pollEventIds.chunked(OutboxRouter.MAX_ETAGS_PER_FILTER).map { chunk ->
+                Filter(kinds = listOf(Nip88.KIND_POLL_RESPONSE), eTags = chunk)
+            }
+            val msg = if (pollFilters.size == 1) ClientMessage.req(pollSubId, pollFilters[0])
+            else ClientMessage.req(pollSubId, pollFilters)
+            // Send to ALL persistent relays for broadest coverage — poll votes
+            // can come from any user on any relay, unlike reactions which cluster
+            // on the post author's inbox relays.
+            val sentAll = relayPool.sendToAllRelays(msg)
+            Log.d("POLL", "[FeedSub] sent poll vote REQ to $sentAll persistent relays")
+            // Also query poll-specified relays and safety net via ephemeral connections
+            val sentUrls = relayPool.getReadRelayUrls().toSet() + relayPool.getWriteRelayUrls().toSet()
+            for (poll in pollEvents) {
+                for (url in Nip88.parsePollRelays(poll)) {
+                    if (url !in sentUrls) relayPool.sendToRelayOrEphemeral(url, msg)
+                }
+            }
+            for (url in safetyNet) {
+                if (url !in sentUrls) relayPool.sendToRelayOrEphemeral(url, msg)
+            }
+            // Dedicated fast collector for poll votes — the main EventRouter
+            // SharedFlow can drop events during startup burst due to buffer pressure.
+            // This collector does minimal work (just addEvent) so it keeps up.
+            pollVoteCollectorJob = scope.launch {
+                relayPool.relayEvents.collect { (event, _, subscriptionId) ->
+                    if (event.kind != Nip88.KIND_POLL_RESPONSE) return@collect
+                    if (!subscriptionId.startsWith("engage")) return@collect
+                    Log.d("POLL", "[FeedSub] collector got kind 1018 id=${event.id.take(12)} sub=$subscriptionId")
+                    eventRepo.addEvent(event)
+                }
             }
         }
     }

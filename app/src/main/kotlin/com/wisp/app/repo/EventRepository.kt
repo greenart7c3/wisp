@@ -1,5 +1,6 @@
 package com.wisp.app.repo
 
+import android.util.Log
 import android.util.LruCache
 import com.wisp.app.nostr.Nip09
 import com.wisp.app.nostr.Nip30
@@ -207,6 +208,10 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     }
 
     fun addEvent(event: NostrEvent) {
+        if (event.kind == Nip88.KIND_POLL_RESPONSE) {
+            val isNew = event.id !in seenEventIds
+            Log.d("POLL", "[EventRepo] addEvent kind=1018 id=${event.id.take(12)} isNew=$isNew pubkey=${event.pubkey.take(8)}")
+        }
         if (!seenEventIds.add(event.id)) return  // atomic dedup across all relay threads
         if (event.created_at > System.currentTimeMillis() / 1000 + 30) return  // reject future-dated notes (30s grace for clock skew)
         if (muteRepo?.isBlocked(event.pubkey) == true) return
@@ -387,37 +392,48 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     }
 
     private fun addPollVote(event: NostrEvent) {
-        val pollId = Nip88.getPollEventId(event) ?: return
+        val pollId = Nip88.getPollEventId(event)
+        if (pollId == null) {
+            Log.d("POLL", "[addPollVote] SKIP: no poll ID in event ${event.id.take(12)}")
+            return
+        }
         val optionIds = Nip88.getResponseOptionIds(event)
-        if (optionIds.isEmpty()) return
+        if (optionIds.isEmpty()) {
+            Log.d("POLL", "[addPollVote] SKIP: no response tags in event ${event.id.take(12)}")
+            return
+        }
 
         // Check if poll has ended
         val pollEvent = eventCache.get(pollId)
-        if (pollEvent != null && Nip88.isPollEnded(pollEvent)) return
+        if (pollEvent != null && Nip88.isPollEnded(pollEvent)) {
+            Log.d("POLL", "[addPollVote] SKIP: poll ended for ${pollId.take(12)}")
+            return
+        }
 
         // One-vote-per-pubkey enforcement (latest timestamp wins)
         val voters = pollVoters.get(pollId)
             ?: ConcurrentHashMap<String, Long>().also { pollVoters.put(pollId, it) }
         val prevTimestamp = voters[event.pubkey]
-        if (prevTimestamp != null && event.created_at <= prevTimestamp) return
+        if (prevTimestamp != null && event.created_at <= prevTimestamp) {
+            Log.d("POLL", "[addPollVote] SKIP: older vote from ${event.pubkey.take(8)} for poll ${pollId.take(12)}")
+            return
+        }
 
         val counts = pollVoteCounts.get(pollId)
             ?: ConcurrentHashMap<String, Int>().also { pollVoteCounts.put(pollId, it) }
-
-        // Decrement old counts if replacing a previous vote
-        if (prevTimestamp != null) {
-            // We don't store previous option IDs per voter, so we can't decrement precisely.
-            // This is acceptable — counts are approximate, and the common case is first vote.
-        }
 
         voters[event.pubkey] = event.created_at
         for (optionId in optionIds) {
             counts[optionId] = (counts[optionId] ?: 0) + 1
         }
 
+        val isOwnVote = event.pubkey == currentUserPubkey
+        Log.d("POLL", "[addPollVote] OK: poll=${pollId.take(12)} pubkey=${event.pubkey.take(8)} options=$optionIds isOwn=$isOwnVote currentUser=${currentUserPubkey?.take(8)} totalVoters=${voters.size}")
+
         // Track current user's vote
-        if (event.pubkey == currentUserPubkey) {
+        if (isOwnVote) {
             userPollVotes.put(pollId, optionIds)
+            Log.d("POLL", "[addPollVote] STORED user vote for poll ${pollId.take(12)}: $optionIds")
         }
 
         pollVoteDirty = true
@@ -941,6 +957,11 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
                     relayFeedBinaryInsert(event)
                 }
             }
+            Nip88.KIND_POLL -> {
+                eventCache.put(event.id, event)
+                relayHintStore?.extractHintsFromTags(event)
+                relayFeedBinaryInsert(event)
+            }
             30023 -> {
                 eventCache.put(event.id, event)
                 relayHintStore?.extractHintsFromTags(event)
@@ -987,6 +1008,11 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
                     relayHintStore?.extractHintsFromTags(event)
                     trendingFeedAppend(event)
                 }
+            }
+            Nip88.KIND_POLL -> {
+                eventCache.put(event.id, event)
+                relayHintStore?.extractHintsFromTags(event)
+                trendingFeedAppend(event)
             }
             30023 -> {
                 eventCache.put(event.id, event)
