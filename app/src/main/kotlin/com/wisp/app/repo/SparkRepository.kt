@@ -19,6 +19,7 @@ import breez_sdk_spark.RegisterLightningAddressRequest
 import breez_sdk_spark.SdkEvent
 import breez_sdk_spark.Seed
 import breez_sdk_spark.SendPaymentOptions
+import breez_sdk_spark.SendPaymentMethod
 import breez_sdk_spark.SendPaymentRequest
 import breez_sdk_spark.SyncWalletRequest
 import breez_sdk_spark.connect
@@ -323,6 +324,55 @@ class SparkRepository(
 
             val prepareReq = PrepareSendPaymentRequest(paymentRequest = bolt11)
             val prepareResponse = instance.prepareSendPayment(prepareReq)
+
+            emitStatus("Sending payment...")
+            val options = SendPaymentOptions.Bolt11Invoice(
+                preferSpark = false,
+                completionTimeoutSecs = 30u
+            )
+            val sendResponse = instance.sendPayment(
+                SendPaymentRequest(prepareResponse, options)
+            )
+
+            val paymentId = sendResponse.payment.id
+            emitStatus("Payment sent")
+            Result.success(paymentId)
+        } catch (e: Exception) {
+            emitStatus("Payment failed: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    /** Prepare a bolt11 payment and extract fee estimate. Returns (feeSats, prepareResponse). */
+    suspend fun prepareSendPayment(bolt11: String): Result<Pair<Long?, Any>> = withContext(Dispatchers.IO) {
+        try {
+            val instance = sdk ?: return@withContext Result.failure(Exception("Not connected"))
+            val prepareReq = PrepareSendPaymentRequest(paymentRequest = bolt11)
+            val prepareResponse = instance.prepareSendPayment(prepareReq)
+
+            val feeSats = when (val method = prepareResponse.paymentMethod) {
+                is SendPaymentMethod.Bolt11Invoice -> {
+                    val spark = method.sparkTransferFeeSats?.toLong() ?: 0L
+                    val lightning = method.lightningFeeSats?.toLong() ?: 0L
+                    spark + lightning
+                }
+                is SendPaymentMethod.SparkAddress -> method.fee.toLong()
+                is SendPaymentMethod.SparkInvoice -> method.fee.toLong()
+                else -> null
+            }
+
+            Result.success(Pair(feeSats, prepareResponse as Any))
+        } catch (e: Exception) {
+            Log.e(TAG, "Prepare payment failed", e)
+            Result.failure(e)
+        }
+    }
+
+    /** Send using a previously prepared response (avoids double-prepare). */
+    suspend fun sendPreparedPayment(prepareData: Any): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val instance = sdk ?: return@withContext Result.failure(Exception("Not connected"))
+            val prepareResponse = prepareData as breez_sdk_spark.PrepareSendPaymentResponse
 
             emitStatus("Sending payment...")
             val options = SendPaymentOptions.Bolt11Invoice(

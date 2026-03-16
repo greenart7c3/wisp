@@ -82,6 +82,13 @@ sealed class AutoCheckState {
     object NotFound : AutoCheckState()
 }
 
+sealed class FeeState {
+    object Idle : FeeState()
+    object Loading : FeeState()
+    data class Estimated(val feeSats: Long) : FeeState()
+    object Unavailable : FeeState()
+}
+
 sealed class WalletPage {
     object Home : WalletPage()
     object ModeSelection : WalletPage()
@@ -174,6 +181,11 @@ class WalletViewModel(
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading
+
+    // Fee estimation
+    private val _feeState = MutableStateFlow<FeeState>(FeeState.Idle)
+    val feeState: StateFlow<FeeState> = _feeState
+    private var _preparedPaymentData: Any? = null
 
     private val _isLoadingMore = MutableStateFlow(false)
     val isLoadingMore: StateFlow<Boolean> = _isLoadingMore
@@ -318,7 +330,8 @@ class WalletViewModel(
 
     fun navigateBack(): Boolean {
         if (pageStack.size <= 1) return false
-        pageStack.removeAt(pageStack.lastIndex)
+        val leaving = pageStack.removeAt(pageStack.lastIndex)
+        if (leaving is WalletPage.SendConfirm) clearFeeState()
         _currentPage.value = pageStack.last()
         return true
     }
@@ -924,10 +937,42 @@ class WalletViewModel(
         }
     }
 
+    fun prepareFee(invoice: String) {
+        if (_walletMode.value != WalletMode.SPARK) {
+            _feeState.value = FeeState.Unavailable
+            return
+        }
+        _feeState.value = FeeState.Loading
+        viewModelScope.launch {
+            sparkRepo.prepareSendPayment(invoice).fold(
+                onSuccess = { (feeSats, prepareData) ->
+                    _preparedPaymentData = prepareData
+                    _feeState.value = if (feeSats != null) FeeState.Estimated(feeSats) else FeeState.Unavailable
+                },
+                onFailure = {
+                    _feeState.value = FeeState.Unavailable
+                }
+            )
+        }
+    }
+
+    private fun clearFeeState() {
+        _feeState.value = FeeState.Idle
+        _preparedPaymentData = null
+    }
+
     fun payInvoice(invoice: String) {
         navigateTo(WalletPage.Sending(invoice))
         viewModelScope.launch {
-            val result = activeProvider.payInvoice(invoice)
+            val preparedData = _preparedPaymentData
+            clearFeeState()
+
+            val result = if (preparedData != null && _walletMode.value == WalletMode.SPARK) {
+                sparkRepo.sendPreparedPayment(preparedData)
+            } else {
+                activeProvider.payInvoice(invoice)
+            }
+
             result.fold(
                 onSuccess = {
                     pageStack.removeAt(pageStack.lastIndex)

@@ -128,6 +128,7 @@ import com.wisp.app.repo.WalletMode
 import com.wisp.app.repo.WalletTransaction
 import com.wisp.app.ui.component.SatsNumpad
 import com.wisp.app.viewmodel.AutoCheckState
+import com.wisp.app.viewmodel.FeeState
 import com.wisp.app.viewmodel.BackupStatus
 import com.wisp.app.viewmodel.DeleteBackupStatus
 import com.wisp.app.viewmodel.RelayBackupInfo
@@ -312,10 +313,21 @@ fun WalletScreen(
                     }
                     is WalletPage.SendConfirm -> {
                         val page = currentPage as WalletPage.SendConfirm
+                        val feeState by viewModel.feeState.collectAsState()
+                        val walletMode by viewModel.walletMode.collectAsState()
+                        LaunchedEffect(page.invoice) {
+                            viewModel.prepareFee(page.invoice)
+                        }
                         SendConfirmContent(
+                            invoice = page.invoice,
                             amountSats = page.amountSats,
-                            paymentHash = page.paymentHash,
                             description = page.description,
+                            feeState = feeState,
+                            networkName = when (walletMode) {
+                                WalletMode.SPARK -> "Spark"
+                                WalletMode.NWC -> "NWC"
+                                else -> "Unknown"
+                            },
                             onPay = { viewModel.payInvoice(page.invoice) },
                             onCancel = { viewModel.navigateBack() },
                             modifier = Modifier.padding(padding)
@@ -1210,13 +1222,18 @@ private fun SendAmountContent(
 
 @Composable
 private fun SendConfirmContent(
+    invoice: String,
     amountSats: Long?,
-    paymentHash: String?,
     description: String?,
+    feeState: FeeState,
+    networkName: String,
     onPay: () -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val feeSats = (feeState as? FeeState.Estimated)?.feeSats
+    val totalSats = if (amountSats != null && feeSats != null) amountSats + feeSats else amountSats
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -1234,59 +1251,94 @@ private fun SendConfirmContent(
 
         Spacer(Modifier.height(24.dp))
 
+        if (amountSats != null) {
+            Text(
+                "%,d sats".format(amountSats),
+                style = MaterialTheme.typography.headlineLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(24.dp))
+        }
+
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant
             )
         ) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                if (amountSats != null) {
-                    Text(
-                        "%,d sats".format(amountSats),
-                        style = MaterialTheme.typography.headlineLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(Modifier.height(16.dp))
-                }
+            Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+                // To
+                SummaryRow(
+                    label = "To",
+                    value = truncateInvoice(invoice)
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                if (paymentHash != null) {
-                    Text(
-                        "Payment Hash",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        paymentHash.take(16) + "..." + paymentHash.takeLast(16),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(Modifier.height(12.dp))
-                }
+                // Network
+                SummaryRow(
+                    label = "Network",
+                    value = networkName
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                if (description != null) {
+                // Fees
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        "Description",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        description,
+                        "Fees",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    when (feeState) {
+                        is FeeState.Loading -> CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp
+                        )
+                        is FeeState.Estimated -> Text(
+                            "%,d sats".format(feeState.feeSats),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        else -> Text(
+                            "\u2014",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                // Total spent
+                SummaryRow(
+                    label = "Total spent",
+                    value = if (totalSats != null) "%,d sats".format(totalSats) else amountSats?.let { "%,d sats".format(it) } ?: "\u2014",
+                    bold = true
+                )
             }
+        }
+
+        if (description != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(
+                description,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
 
         Spacer(Modifier.height(24.dp))
 
         Button(
             onClick = onPay,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            enabled = feeState !is FeeState.Loading
         ) {
             Icon(Icons.Default.ElectricBolt, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
@@ -1301,6 +1353,41 @@ private fun SendConfirmContent(
         ) {
             Text("Cancel")
         }
+    }
+}
+
+@Composable
+private fun SummaryRow(
+    label: String,
+    value: String,
+    bold: Boolean = false
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 14.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            value,
+            style = if (bold) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
+private fun truncateInvoice(invoice: String): String {
+    val lower = invoice.lowercase()
+    return if (lower.length > 16) {
+        lower.take(8) + "..." + lower.takeLast(6)
+    } else {
+        lower
     }
 }
 
