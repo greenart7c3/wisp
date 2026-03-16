@@ -424,14 +424,15 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         val eventKind: Int
         if (_pollEnabled.value) {
             val nonBlankOptions = _pollOptions.value
-                .mapIndexed { i, label -> Nip88.PollOption(i.toString(), label.trim()) }
+                .map { label -> Nip88.PollOption(Nip88.generateOptionId(), label.trim()) }
                 .filter { it.label.isNotBlank() }
             if (nonBlankOptions.size < 2) {
                 _error.value = "Poll needs at least 2 options"
                 _publishing.value = false
                 return 0
             }
-            tags.addAll(Nip88.buildPollTags(nonBlankOptions, _pollType.value))
+            val pollRelays = relayPool.getWriteRelayUrls()
+            tags.addAll(Nip88.buildPollTags(nonBlankOptions, _pollType.value, relayUrls = pollRelays))
             eventKind = Nip88.KIND_POLL
         } else {
             eventKind = 1

@@ -896,11 +896,11 @@ class FeedSubscriptionManager(
             }
         }
 
-        // Subscribe for poll vote responses on read relays + safety net.
-        // Voters publish kind 1018 to their own write relays, which may not overlap
-        // with the poll author's inbox relays queried by the general engagement sub.
-        val pollEventIds = feedEvents.filter { it.kind == Nip88.KIND_POLL }.map { it.id }
-        if (pollEventIds.isNotEmpty()) {
+        // Subscribe for poll vote responses per NIP-88: query the relays
+        // specified in each poll event's relay tags, plus read relays as fallback.
+        val pollEvents = feedEvents.filter { it.kind == Nip88.KIND_POLL }
+        if (pollEvents.isNotEmpty()) {
+            val pollEventIds = pollEvents.map { it.id }
             val pollSubId = "engage-poll-votes"
             activeEngagementSubIds.add(pollSubId)
             val pollFilters = pollEventIds.chunked(OutboxRouter.MAX_ETAGS_PER_FILTER).map { chunk ->
@@ -908,9 +908,20 @@ class FeedSubscriptionManager(
             }
             val msg = if (pollFilters.size == 1) ClientMessage.req(pollSubId, pollFilters[0])
             else ClientMessage.req(pollSubId, pollFilters)
+            // Query poll-specified relays (where voters are told to publish)
+            val pollRelayUrls = mutableSetOf<String>()
+            for (poll in pollEvents) {
+                pollRelayUrls.addAll(Nip88.parsePollRelays(poll))
+            }
+            for (url in pollRelayUrls) {
+                relayPool.sendToRelayOrEphemeral(url, msg)
+            }
+            // Also query our read relays and safety net as fallback
             relayPool.sendToReadRelays(msg)
             for (url in safetyNet) {
-                relayPool.sendToRelayOrEphemeral(url, msg)
+                if (url !in pollRelayUrls) {
+                    relayPool.sendToRelayOrEphemeral(url, msg)
+                }
             }
         }
     }

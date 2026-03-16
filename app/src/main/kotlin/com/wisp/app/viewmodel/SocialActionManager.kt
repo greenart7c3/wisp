@@ -326,7 +326,15 @@ class SocialActionManager(
                 }
                 val event = s.signEvent(kind = Nip88.KIND_POLL_RESPONSE, content = "", tags = tags)
                 val msg = ClientMessage.event(event)
+                // Send to our write relays
                 relayPool.sendToWriteRelays(msg)
+                // Also send to the poll's specified relays per NIP-88
+                val pollEvent = eventRepo.getEvent(pollEventId)
+                if (pollEvent != null) {
+                    for (url in Nip88.parsePollRelays(pollEvent)) {
+                        relayPool.sendToRelayOrEphemeral(url, msg)
+                    }
+                }
                 // Optimistically add to eventRepo so UI updates immediately
                 eventRepo.addEvent(event)
             } catch (_: Exception) {}
