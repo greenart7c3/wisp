@@ -86,6 +86,9 @@ class EventRouter(
     }
 
     suspend fun processRelayEvent(event: NostrEvent, relayUrl: String, subscriptionId: String) {
+        if (event.kind == Nip88.KIND_POLL_RESPONSE) {
+            Log.d("POLL", "[EventRouter] received kind 1018 id=${event.id.take(12)} sub=$subscriptionId relay=$relayUrl")
+        }
         if (subscriptionId == "dms") {
             if (event.kind == 1059) processGiftWrap(event, relayUrl)
             return
@@ -177,7 +180,10 @@ class EventRouter(
                 5 -> eventRepo.addEvent(event)
                 6 -> eventRepo.addEvent(event)
                 7 -> eventRepo.addEvent(event)
-                Nip88.KIND_POLL_RESPONSE -> eventRepo.addEvent(event)
+                Nip88.KIND_POLL_RESPONSE -> {
+                    Log.d("POLL", "[EventRouter] kind 1018 from sub=$subscriptionId pubkey=${event.pubkey.take(8)} pollId=${Nip88.getPollEventId(event)?.take(12)} options=${Nip88.getResponseOptionIds(event)}")
+                    eventRepo.addEvent(event)
+                }
                 9735 -> {
                     eventRepo.addEvent(event)
                     eventRepo.addEventRelay(event.id, relayUrl)

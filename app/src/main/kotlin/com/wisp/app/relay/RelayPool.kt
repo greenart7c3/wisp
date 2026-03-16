@@ -321,6 +321,9 @@ class RelayPool {
                             }
                         }
                         if (shouldEmit) {
+                            if (msg.event.kind == 1018) {
+                                Log.d("POLL", "[Pool] emit kind 1018 id=${msg.event.id.take(12)} sub=${msg.subscriptionId} relay=${relay.config.url}")
+                            }
                             _events.tryEmit(msg.event)
                             _relayEvents.tryEmit(RelayEvent(msg.event, relay.config.url, msg.subscriptionId))
                             if (msg.subscriptionId.startsWith("feed")) {
