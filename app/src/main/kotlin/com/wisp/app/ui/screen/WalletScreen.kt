@@ -1630,7 +1630,6 @@ private fun ReceiveSuccessContent(
     modifier: Modifier = Modifier
 ) {
     val primary = MaterialTheme.colorScheme.primary
-    val primaryContainer = MaterialTheme.colorScheme.primaryContainer
 
     // Animation progress: 0 → 1 over ~1.6s
     val animProgress = remember { Animatable(0f) }
@@ -1732,7 +1731,7 @@ private fun ReceiveSuccessContent(
                     modifier = Modifier
                         .size(64.dp)
                         .background(
-                            primaryContainer.copy(alpha = checkAlpha.value),
+                            primary.copy(alpha = checkAlpha.value * 0.15f),
                             CircleShape
                         )
                         .padding(12.dp),
@@ -2328,6 +2327,8 @@ private fun SparkBackupContent(
     onConfirm: () -> Unit
 ) {
     val words = mnemonic.split(" ")
+    val clipboardManager = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
 
     Spacer(Modifier.height(16.dp))
 
@@ -2380,7 +2381,25 @@ private fun SparkBackupContent(
         }
     }
 
-    Spacer(Modifier.height(16.dp))
+    Spacer(Modifier.height(12.dp))
+
+    OutlinedButton(
+        onClick = {
+            clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(mnemonic))
+            copied = true
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Icon(
+            if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(if (copied) "Copied!" else "Copy to Clipboard")
+    }
+
+    Spacer(Modifier.height(12.dp))
 
     Text(
         "This recovery phrase is specific to Spark wallets. It will not work with other Lightning or Bitcoin wallet apps.",
