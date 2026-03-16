@@ -21,15 +21,20 @@ import com.wisp.app.relay.OnboardingPhase
 import com.wisp.app.relay.RelayConfig
 import com.wisp.app.relay.RelayPool
 import com.wisp.app.relay.RelayProber
+import com.wisp.app.nostr.Nip78
 import com.wisp.app.repo.BlossomRepository
 import com.wisp.app.repo.ContactRepository
 import com.wisp.app.repo.KeyRepository
+import com.wisp.app.repo.SparkRepository
+import com.wisp.app.repo.WalletMode
+import com.wisp.app.repo.WalletModeRepository
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 
@@ -96,6 +101,29 @@ class OnboardingViewModel(app: Application) : AndroidViewModel(app) {
         )
         private val ACTIVE_RELAYS = listOf("wss://premium.primal.net", "wss://nostr.wine")
         private const val NEWS_RELAY = "wss://news.utxo.one"
+
+        private val COLORS = listOf(
+            "blue", "red", "green", "gold", "silver", "amber", "coral",
+            "violet", "jade", "ruby", "teal", "cyan", "crimson", "ivory",
+            "bronze", "copper", "indigo", "scarlet", "azure", "pearl",
+            "onyx", "sage", "rose", "slate", "plum", "lime", "rust", "mint"
+        )
+        private val ANIMALS = listOf(
+            "panda", "wolf", "fox", "falcon", "otter", "raven", "tiger",
+            "eagle", "dolphin", "hawk", "lynx", "bear", "owl", "cobra",
+            "bison", "crane", "gecko", "heron", "koala", "lemur",
+            "moose", "newt", "ocelot", "puma", "quail", "robin",
+            "shark", "swift", "viper", "wren", "yak", "zebra",
+            "badger", "cougar", "drake", "finch", "gopher", "hound"
+        )
+
+        private fun generateUsername(): String {
+            val random = java.security.SecureRandom()
+            val color = COLORS[random.nextInt(COLORS.size)]
+            val animal = ANIMALS[random.nextInt(ANIMALS.size)]
+            val number = random.nextInt(90) + 10 // 10-99
+            return "$color$animal$number"
+        }
     }
 
     fun updateName(value: String) { _name.value = value }
@@ -119,12 +147,33 @@ class OnboardingViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun startDiscovery() {
+    fun startDiscovery(sparkRepo: SparkRepository? = null) {
+        // Reset state from any previous onboarding run (ViewModel survives logout)
+        suggestionsJob?.cancel()
+        suggestionsJob = null
+        _activeNow.value = SuggestionSection()
+        _creators.value = SuggestionSection()
+        _news.value = SuggestionSection()
+        _selectedPubkeys.value = emptySet()
+        _publishing.value = false
+        _error.value = null
+
         // Use real keypair if available, otherwise generate a throwaway for probing
         val keypair = keyRepo.getKeypair() ?: Keys.generate()
         val pubHex = keyRepo.getPubkeyHex() ?: keypair.pubkey.toHex()
         keyRepo.reloadPrefs(pubHex)
         blossomRepo.reload(pubHex)
+
+        // Pre-generate mnemonic (CPU only, no network contention with relay probing)
+        if (sparkRepo != null) {
+            try {
+                val mnemonic = sparkRepo.newMnemonic()
+                sparkRepo.saveMnemonic(mnemonic)
+            } catch (e: Exception) {
+                Log.w(TAG, "Mnemonic generation failed: ${e.message}")
+            }
+        }
+
         viewModelScope.launch {
             val relays = RelayProber.discoverAndSelect(
                 keypair = keypair,
@@ -133,14 +182,30 @@ class OnboardingViewModel(app: Application) : AndroidViewModel(app) {
             )
             _probingUrl.value = null
             _discoveredRelays.value = relays
+
+            // Start Spark connection after relay discovery to avoid network contention
+            if (sparkRepo != null) {
+                launch {
+                    try {
+                        sparkRepo.connect()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Wallet pre-connect failed: ${e.message}")
+                    }
+                }
+            }
         }
     }
 
     /**
-     * Finish profile step: save relays, init relay pool, publish kind 0.
+     * Finish profile step: save relays, init relay pool, set up wallet, publish kind 0.
      * Returns true if successful.
      */
-    fun finishProfile(relayPool: RelayPool, signer: NostrSigner? = null): Boolean {
+    suspend fun finishProfile(
+        relayPool: RelayPool,
+        sparkRepo: SparkRepository? = null,
+        walletModeRepo: WalletModeRepository? = null,
+        signer: NostrSigner? = null
+    ): Boolean {
         val s = signer ?: keyRepo.getKeypair()?.let { LocalSigner(it.privkey, it.pubkey) } ?: return false
         val relays = _discoveredRelays.value ?: RelayConfig.DEFAULTS
 
@@ -150,34 +215,77 @@ class OnboardingViewModel(app: Application) : AndroidViewModel(app) {
             keyRepo.saveRelays(relays)
             relayPool.updateRelays(relays)
 
+            // Wait for Spark wallet and register lightning address
+            var lightningAddress: String? = null
+            if (sparkRepo != null) {
+                _phase.value = OnboardingPhase.WALLET_SETUP
+                try {
+                    val connected = withTimeoutOrNull(15_000) {
+                        sparkRepo.isConnected.first { it }
+                    }
+                    if (connected != null) {
+                        for (attempt in 1..3) {
+                            val username = generateUsername()
+                            val available = sparkRepo.checkLightningAddressAvailable(username)
+                                .getOrNull() ?: false
+                            if (available) {
+                                val addr = sparkRepo.registerLightningAddress(username).getOrNull()
+                                if (addr != null) {
+                                    lightningAddress = addr
+                                    break
+                                }
+                            }
+                        }
+                        walletModeRepo?.setMode(WalletMode.SPARK)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Wallet setup failed: ${e.message}")
+                }
+            }
+
             _phase.value = OnboardingPhase.BROADCASTING
 
-            viewModelScope.launch {
-                val relayTags = Nip65.buildRelayTags(relays)
-                val relayListEvent = s.signEvent(kind = 10002, content = "", tags = relayTags)
-                val relayListMsg = ClientMessage.event(relayListEvent)
-                relayPool.sendToWriteRelays(relayListMsg)
+            val relayTags = Nip65.buildRelayTags(relays)
+            val relayListEvent = s.signEvent(kind = 10002, content = "", tags = relayTags)
+            val relayListMsg = ClientMessage.event(relayListEvent)
+            relayPool.sendToWriteRelays(relayListMsg)
+            for (url in RelayConfig.DEFAULT_INDEXER_RELAYS) {
+                relayPool.sendToRelayOrEphemeral(url, relayListMsg)
+            }
+
+            val content = buildJsonObject {
+                if (_name.value.isNotBlank()) put("name", JsonPrimitive(_name.value))
+                if (_about.value.isNotBlank()) put("about", JsonPrimitive(_about.value))
+                if (_picture.value.isNotBlank()) put("picture", JsonPrimitive(_picture.value))
+                if (lightningAddress != null) put("lud16", JsonPrimitive(lightningAddress))
+            }.toString()
+
+            if (content != "{}") {
+                val event = s.signEvent(kind = 0, content = content)
+                val profileMsg = ClientMessage.event(event)
+                relayPool.sendToWriteRelays(profileMsg)
                 for (url in RelayConfig.DEFAULT_INDEXER_RELAYS) {
-                    relayPool.sendToRelayOrEphemeral(url, relayListMsg)
+                    relayPool.sendToRelayOrEphemeral(url, profileMsg)
                 }
+            }
 
-                if (_name.value.isNotBlank() || _about.value.isNotBlank() || _picture.value.isNotBlank()) {
-                    val content = buildJsonObject {
-                        if (_name.value.isNotBlank()) put("name", JsonPrimitive(_name.value))
-                        if (_about.value.isNotBlank()) put("about", JsonPrimitive(_about.value))
-                        if (_picture.value.isNotBlank()) put("picture", JsonPrimitive(_picture.value))
-                    }.toString()
-
-                    val event = s.signEvent(kind = 0, content = content)
-                    val profileMsg = ClientMessage.event(event)
-                    relayPool.sendToWriteRelays(profileMsg)
-                    for (url in RelayConfig.DEFAULT_INDEXER_RELAYS) {
-                        relayPool.sendToRelayOrEphemeral(url, profileMsg)
+            // Backup mnemonic to relays via NIP-78
+            if (sparkRepo != null && lightningAddress != null) {
+                val mnemonic = sparkRepo.getMnemonic()
+                if (mnemonic != null) {
+                    viewModelScope.launch {
+                        try {
+                            val backupEvent = Nip78.createBackupEvent(s, mnemonic)
+                            val backupMsg = ClientMessage.event(backupEvent)
+                            relayPool.sendToWriteRelays(backupMsg)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Mnemonic backup failed: ${e.message}")
+                        }
                     }
                 }
-
-                _publishing.value = false
             }
+
+            _publishing.value = false
             true
         } catch (e: Exception) {
             _error.value = "Failed: ${e.message}"

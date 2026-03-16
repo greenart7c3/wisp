@@ -693,6 +693,7 @@ class WalletViewModel(
     }
 
     fun refreshState() {
+        _walletMode.value = walletModeRepo.getMode()
         val mode = _walletMode.value
         val provider = activeProvider
 
@@ -703,6 +704,7 @@ class WalletViewModel(
 
         if (provider.isConnected.value) {
             refreshBalance()
+            if (mode == WalletMode.SPARK) fetchLightningAddress()
         } else if (_walletState.value is WalletState.Connected) {
             // Was previously connected — reconnect silently
             when (mode) {

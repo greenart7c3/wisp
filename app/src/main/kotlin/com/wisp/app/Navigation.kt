@@ -1678,13 +1678,24 @@ fun WispNavHost(
                 authViewModel.keyRepo.clearKeypair()
                 navController.popBackStack()
             }
+            val scope = rememberCoroutineScope()
             BackHandler(onBack = onBack)
+            LaunchedEffect(Unit) {
+                onboardingViewModel.startDiscovery(feedViewModel.sparkRepo)
+            }
             OnboardingScreen(
                 viewModel = onboardingViewModel,
                 onContinue = {
-                    if (onboardingViewModel.finishProfile(feedViewModel.relayPool, signer = activeSigner)) {
-                        navController.navigate(Routes.ONBOARDING_SUGGESTIONS) {
-                            popUpTo(Routes.ONBOARDING_PROFILE) { inclusive = true }
+                    scope.launch {
+                        if (onboardingViewModel.finishProfile(
+                                feedViewModel.relayPool,
+                                sparkRepo = feedViewModel.sparkRepo,
+                                walletModeRepo = feedViewModel.walletModeRepo,
+                                signer = activeSigner
+                            )) {
+                            navController.navigate(Routes.ONBOARDING_SUGGESTIONS) {
+                                popUpTo(Routes.ONBOARDING_PROFILE) { inclusive = true }
+                            }
                         }
                     }
                 },
