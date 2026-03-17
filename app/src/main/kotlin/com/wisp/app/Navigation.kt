@@ -136,6 +136,7 @@ object Routes {
     const val RELAY_DETAIL = "relay_detail/{relayUrl}"
     const val CUSTOM_EMOJIS = "custom_emojis"
     const val HASHTAG_FEED = "hashtag/{tag}"
+    const val HASHTAG_SET_FEED = "hashtag_set/{name}/{tags}"
     const val EXISTING_USER_ONBOARDING = "onboarding/existing"
     const val DRAFTS = "drafts"
     const val SOCIAL_GRAPH = "social_graph"
@@ -735,6 +736,11 @@ fun WispNavHost(
                 onHashtagClick = { tag ->
                     navController.navigate("hashtag/${java.net.URLEncoder.encode(tag, "UTF-8")}")
                 },
+                onViewSetFeed = { set ->
+                    val encodedName = java.net.URLEncoder.encode(set.name, "UTF-8")
+                    val encodedTags = java.net.URLEncoder.encode(set.hashtags.joinToString(","), "UTF-8")
+                    navController.navigate("hashtag_set/$encodedName/$encodedTags")
+                },
                 onArticleClick = { kind, author, dTag ->
                     navController.navigate("article/$kind/$author/${java.net.URLEncoder.encode(dTag, "UTF-8")}")
                 }
@@ -1280,6 +1286,101 @@ fun WispNavHost(
                 },
                 nip05Repo = feedViewModel.nip05Repo,
                 translationRepo = feedViewModel.translationRepo,
+                onHashtagPicker = {
+                    feedViewModel.requestHashtagPicker()
+                    navController.popBackStack()
+                },
+                onBack = { navController.popBackStack() },
+                onPollVote = { pollId, optionIds -> feedViewModel.publishPollVote(pollId, optionIds) }
+            )
+        }
+
+        composable(
+            Routes.HASHTAG_SET_FEED,
+            arguments = listOf(
+                navArgument("name") { type = NavType.StringType },
+                navArgument("tags") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val encodedName = backStackEntry.arguments?.getString("name") ?: return@composable
+            val encodedTags = backStackEntry.arguments?.getString("tags") ?: return@composable
+            val name = java.net.URLDecoder.decode(encodedName, "UTF-8")
+            val tags = java.net.URLDecoder.decode(encodedTags, "UTF-8").split(",").filter { it.isNotBlank() }
+            if (tags.isEmpty()) return@composable
+
+            val hashtagFeedViewModel: HashtagFeedViewModel = viewModel()
+            LaunchedEffect(tags) {
+                hashtagFeedViewModel.loadHashtags(
+                    tags = tags,
+                    name = name,
+                    relayPool = feedViewModel.relayPool,
+                    eventRepo = feedViewModel.eventRepo,
+                    topRelayUrls = feedViewModel.getScoredRelays().take(10).map { it.url }
+                )
+            }
+            val setFeedNoteActions = remember {
+                com.wisp.app.ui.component.NoteActions(
+                    onReply = { event ->
+                        replyTarget = event
+                        quoteTarget = null
+                        composeViewModel.clear()
+                        navController.navigate(Routes.COMPOSE)
+                    },
+                    onReact = { event, emoji -> feedViewModel.toggleReaction(event, emoji) },
+                    onRepost = { event -> feedViewModel.sendRepost(event) },
+                    onQuote = { event ->
+                        quoteTarget = event
+                        replyTarget = null
+                        composeViewModel.clear()
+                        navController.navigate(Routes.COMPOSE)
+                    },
+                    onZap = { _ -> },
+                    onProfileClick = { pubkey -> navController.navigate("profile/$pubkey") },
+                    onNoteClick = { eventId -> navController.navigate("thread/$eventId") },
+                    onAddToList = { eventId -> addToListEventId = eventId },
+                    onFollowAuthor = { pubkey -> feedViewModel.toggleFollow(pubkey) },
+                    onBlockAuthor = { pubkey -> feedViewModel.blockUser(pubkey) },
+                    onPin = { eventId -> feedViewModel.togglePin(eventId) },
+                    isFollowing = { pubkey -> feedViewModel.contactRepo.isFollowing(pubkey) },
+                    userPubkey = feedViewModel.getUserPubkey(),
+                    nip05Repo = feedViewModel.nip05Repo,
+                    onHashtagClick = { clickedTag ->
+                        navController.navigate("hashtag/${java.net.URLEncoder.encode(clickedTag, "UTF-8")}")
+                    },
+                    onRelayClick = { url ->
+                        feedViewModel.setSelectedRelay(url)
+                        feedViewModel.setFeedType(FeedType.RELAY)
+                        navController.popBackStack(Routes.FEED, inclusive = false)
+                    },
+                    onArticleClick = { kind, author, dTag ->
+                        navController.navigate("article/$kind/$author/${java.net.URLEncoder.encode(dTag, "UTF-8")}")
+                    }
+                )
+            }
+            val interestSets by feedViewModel.interestRepo.sets.collectAsState()
+            val interestSetsFetched by feedViewModel.interestSetsFetched.collectAsState()
+            LaunchedEffect(Unit) {
+                feedViewModel.fetchInterestSetsIfMissing()
+            }
+            HashtagFeedScreen(
+                viewModel = hashtagFeedViewModel,
+                eventRepo = feedViewModel.eventRepo,
+                userPubkey = feedViewModel.getUserPubkey(),
+                noteActions = setFeedNoteActions,
+                interestSets = interestSets,
+                interestSetsLoaded = interestSetsFetched,
+                onFollowHashtag = { dTag -> tags.forEach { feedViewModel.followHashtag(it, dTag) } },
+                onUnfollowHashtag = { dTag -> tags.forEach { feedViewModel.unfollowHashtag(it, dTag) } },
+                onCreateDefaultSet = {
+                    feedViewModel.createInterestSet("Interests")
+                    tags.forEach { feedViewModel.followHashtag(it, "interests") }
+                },
+                nip05Repo = feedViewModel.nip05Repo,
+                translationRepo = feedViewModel.translationRepo,
+                onHashtagPicker = {
+                    feedViewModel.requestHashtagPicker()
+                    navController.popBackStack()
+                },
                 onBack = { navController.popBackStack() },
                 onPollVote = { pollId, optionIds -> feedViewModel.publishPollVote(pollId, optionIds) }
             )
