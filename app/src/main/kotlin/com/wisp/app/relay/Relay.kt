@@ -44,6 +44,8 @@ class Relay(
         private const val ATTEMPT_WINDOW_MS = 60_000L       // Track attempts in the last 60s
         private const val MAX_ATTEMPTS_IN_WINDOW = 20        // Threshold before backing off
         private const val BACKOFF_COOLDOWN_MS = 5 * 60_000L  // 5 min cooldown when threshold hit
+        private const val INITIAL_RECONNECT_DELAY_MS = 3_000L
+        private const val MAX_RECONNECT_DELAY_MS = 5 * 60_000L  // 5 min cap
 
         /** Shared scheduler for non-blocking reconnect delays (avoids blocking OkHttp dispatcher threads). */
         private val reconnectScheduler = Executors.newSingleThreadScheduledExecutor { r ->
@@ -52,6 +54,9 @@ class Relay(
 
         fun createClient(): OkHttpClient = HttpClientFactory.createRelayClient()
     }
+
+    // Exponential backoff state — doubles on each failure, reset on success
+    @Volatile private var reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS
 
     private val sendLock = Any()
     private val pendingMessages = ConcurrentLinkedQueue<String>()
@@ -127,7 +132,8 @@ class Relay(
                         Log.d("TorRelay", "[Relay] .onion connection SUCCESS: ${config.url}")
                     }
                     isConnected = true
-                    // Successful connection — reset attempt tracking
+                    // Successful connection — reset backoff and attempt tracking
+                    reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS
                     synchronized(attemptLock) { connectAttempts.clear() }
                     _connectionState.tryEmit(true)
                     drainPendingMessages(webSocket)
@@ -213,8 +219,11 @@ class Relay(
                 return ws.send(message)
             }
         }
-        // Queue message for delivery when connected
-        if (pendingMessages.size < maxPendingMessages) {
+        // REQ subscriptions are never queued — resyncSubscriptions re-sends them on
+        // reconnect via activeSubscriptions. Queueing REQs would cause drainPendingMessages
+        // and resyncSubscriptions to both fire the same REQ on reconnect, causing duplicate
+        // subscriptions and server-side EOFE / connection reset errors.
+        if (!message.startsWith("[\"REQ\"") && pendingMessages.size < maxPendingMessages) {
             pendingMessages.add(message)
         }
         return false
@@ -262,7 +271,10 @@ class Relay(
             // drainPendingMessages() is using the WebSocket when we tear it down.
             // Without this, cancel() can null OkHttp's internal writer mid-send → NPE.
             if (ws != null) {
-                synchronized(sendLock) { ws.cancel() }
+                // Graceful close — sends WebSocket CLOSE frame so the server knows
+                // we're leaving cleanly. Avoids RST-then-SYN storms on big relays
+                // that were actively streaming events when we backgrounded.
+                synchronized(sendLock) { ws.close(1001, null) }
             }
         }
     }
@@ -288,6 +300,7 @@ class Relay(
     /** Reset backoff state — call when user explicitly reconnects */
     fun resetBackoff() {
         cooldownUntil = 0L
+        reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS
         synchronized(attemptLock) { connectAttempts.clear() }
     }
 
@@ -296,19 +309,21 @@ class Relay(
 
     private fun reconnect() {
         if (!autoReconnect || !reconnectEnabled) return
+        // Exponential backoff: double the delay on each failure, capped at MAX_RECONNECT_DELAY_MS.
+        // Prevents rapid retry storms that would hit MAX_ATTEMPTS_IN_WINDOW and trigger the
+        // 5-minute cooldown, which was causing relays to silently stop reconnecting.
+        val delayMs = maxOf(reconnectDelayMs, cooldownUntil - System.currentTimeMillis())
+        reconnectDelayMs = minOf(reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS)
+        Log.d("RLC", "[Relay] reconnect() ${config.url} — delay=${delayMs}ms nextDelay=${reconnectDelayMs}ms")
         if (scope != null) {
             pendingReconnectJob?.cancel()
             pendingReconnectJob = scope.launch {
-                val now = System.currentTimeMillis()
-                val delayMs = maxOf(3000L, cooldownUntil - now)
                 delay(delayMs)
                 if (!isConnected) connect()
             }
         } else {
             // Fallback for relays created without a scope — use scheduler instead of
             // blocking a thread from the shared OkHttp dispatcher pool
-            val now = System.currentTimeMillis()
-            val delayMs = maxOf(3000L, cooldownUntil - now)
             pendingReconnect = reconnectScheduler.schedule({
                 if (!isConnected) connect()
             }, delayMs, TimeUnit.MILLISECONDS)
