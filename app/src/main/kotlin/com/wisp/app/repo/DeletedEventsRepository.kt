@@ -22,7 +22,6 @@ class DeletedEventsRepository(private val context: Context, pubkeyHex: String? =
 
     fun clear() {
         deletedIds = HashSet()
-        prefs.edit().clear().apply()
     }
 
     fun reload(pubkeyHex: String?) {

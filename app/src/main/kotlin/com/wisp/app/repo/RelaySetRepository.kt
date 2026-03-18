@@ -126,7 +126,6 @@ class RelaySetRepository(private val context: Context, pubkeyHex: String? = null
         _favoriteRelays.value = emptyList()
         ownerPubkey = null
         favoriteRelaysTimestamp = 0
-        prefs.edit().clear().apply()
     }
 
     fun reload(pubkeyHex: String?) {

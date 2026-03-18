@@ -56,7 +56,6 @@ class InterestRepository(private val context: Context, pubkeyHex: String? = null
     fun clear() {
         interestSets.clear()
         _sets.value = emptyList()
-        prefs.edit().clear().apply()
     }
 
     fun reload(pubkeyHex: String?) {

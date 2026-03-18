@@ -50,7 +50,6 @@ class PinRepository(private val context: Context, pubkeyHex: String? = null) {
         _pinnedIds.value = emptySet()
         idSet = HashSet()
         lastUpdated = 0
-        prefs.edit().clear().apply()
     }
 
     fun reload(pubkeyHex: String?) {

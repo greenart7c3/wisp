@@ -121,7 +121,6 @@ class MuteRepository(private val context: Context, pubkeyHex: String? = null) {
         wordSet = HashSet()
         threadSet = HashSet()
         lastUpdated = 0
-        prefs.edit().clear().apply()
     }
 
     fun reload(pubkeyHex: String?) {

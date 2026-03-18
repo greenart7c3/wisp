@@ -80,7 +80,6 @@ class ListRepository(private val context: Context, pubkeyHex: String? = null) {
         _ownLists.value = emptyList()
         _selectedList.value = null
         ownerPubkey = null
-        prefs.edit().clear().apply()
     }
 
     fun reload(pubkeyHex: String?) {

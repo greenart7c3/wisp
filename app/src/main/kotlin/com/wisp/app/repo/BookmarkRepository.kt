@@ -59,7 +59,6 @@ class BookmarkRepository(private val context: Context, pubkeyHex: String? = null
         coordinateSet = HashSet()
         hashtagSet = HashSet()
         lastUpdated = 0
-        prefs.edit().clear().apply()
     }
 
     fun reload(pubkeyHex: String?) {
