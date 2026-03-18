@@ -507,6 +507,7 @@ class ExtendedNetworkRepository(
         pendingFollowLists.clear()
         socialGraphDb.clearAll()
         discoveryTotal = 0
+        prefs.edit().clear().apply()
     }
 
     fun reload(pubkeyHex: String?) {
