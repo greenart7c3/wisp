@@ -29,14 +29,18 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.ElectricBolt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -89,6 +93,7 @@ import com.wisp.app.ui.component.QrCodeDialog
 import com.wisp.app.ui.component.ProfilePicture
 import com.wisp.app.ui.component.RichContent
 import com.wisp.app.ui.component.ZapDialog
+import com.wisp.app.viewmodel.ProfileSortMode
 import com.wisp.app.viewmodel.UserProfileViewModel
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -244,11 +249,26 @@ fun UserProfileScreen(
         )
     }
 
+    val notesSortMode by viewModel.notesSortMode.collectAsState()
+    val repliesSortMode by viewModel.repliesSortMode.collectAsState()
+    val sortedNotes by viewModel.sortedNotes.collectAsState()
+    val sortedNotesLoading by viewModel.sortedNotesLoading.collectAsState()
+    val sortedReplies by viewModel.sortedReplies.collectAsState()
+    val sortedRepliesLoading by viewModel.sortedRepliesLoading.collectAsState()
+    val followers by viewModel.followers.collectAsState()
+    val followersLoading by viewModel.followersLoading.collectAsState()
+
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    var showSortDropdown by remember { mutableStateOf(false) }
+
+    if (selectedTab == 4) {
+        LaunchedEffect(Unit) { viewModel.loadFollowers() }
+    }
+
     var blockedContentRevealed by remember { mutableStateOf(false) }
     var fullScreenMediaImageUrl by remember { mutableStateOf<String?>(null) }
     var fullScreenMediaVideoUrl by remember { mutableStateOf<String?>(null) }
-    val tabTitles = listOf("Notes", "Replies", "Media", "Following", "Relays")
+    val tabTitles = listOf("Notes", "Replies", "Media", "Following", "Followers", "Relays")
 
     if (fullScreenMediaImageUrl != null) {
         FullScreenImageViewer(
@@ -430,6 +450,54 @@ fun UserProfileScreen(
                 }
             }
 
+            if (selectedTab == 0 || selectedTab == 1) {
+                item {
+                    val currentSortMode = if (selectedTab == 0) notesSortMode else repliesSortMode
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surface)
+                            .padding(vertical = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box {
+                            Surface(
+                                onClick = { showSortDropdown = true },
+                                shape = RoundedCornerShape(20.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(currentSortMode.label, style = MaterialTheme.typography.labelLarge)
+                                    Spacer(Modifier.width(2.dp))
+                                    Icon(Icons.Default.ArrowDropDown, contentDescription = "Sort", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                            DropdownMenu(
+                                expanded = showSortDropdown,
+                                onDismissRequest = { showSortDropdown = false }
+                            ) {
+                                ProfileSortMode.entries.forEach { mode ->
+                                    DropdownMenuItem(
+                                        text = { Text(mode.label) },
+                                        onClick = {
+                                            showSortDropdown = false
+                                            if (selectedTab == 0) viewModel.setNotesSortMode(mode)
+                                            else viewModel.setRepliesSortMode(mode)
+                                        },
+                                        trailingIcon = if (currentSortMode == mode) {{
+                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        }} else null
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             when (selectedTab) {
                 0 -> if (isBlocked && !blockedContentRevealed) {
                     item { BlockedContentOverlay(onReveal = { blockedContentRevealed = true }) }
@@ -490,10 +558,19 @@ fun UserProfileScreen(
                         }
                     }
 
-                    if (rootNotes.isEmpty() && pinnedEvents.isEmpty()) {
+                    val displayNotes = if (notesSortMode == ProfileSortMode.RECENCY) rootNotes else sortedNotes
+                    if (notesSortMode != ProfileSortMode.RECENCY && sortedNotes.isEmpty() && sortedNotesLoading) {
+                        item {
+                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth().padding(32.dp)) {
+                                CircularProgressIndicator()
+                            }
+                        }
+                    } else if (notesSortMode != ProfileSortMode.RECENCY && sortedNotes.isEmpty() && !sortedNotesLoading) {
+                        item { FeedCrawlingMessage() }
+                    } else if (displayNotes.isEmpty() && pinnedEvents.isEmpty()) {
                         item { EmptyTabContent("No notes yet") }
                     } else {
-                        items(items = rootNotes, key = { it.id }) { event ->
+                        items(items = displayNotes, key = { it.id }) { event ->
                             if (event.kind == 30023) {
                                 ProfileArticleCard(
                                     event = event,
@@ -587,7 +664,7 @@ fun UserProfileScreen(
                                 onOpenEmojiLibrary = onOpenEmojiLibrary
                             )
                         }
-                        if (rootNotes.isNotEmpty()) {
+                        if (rootNotes.isNotEmpty() && notesSortMode == ProfileSortMode.RECENCY) {
                             item {
                                 LoadMoreButton(onClick = { viewModel.loadMoreNotes() })
                             }
@@ -597,10 +674,19 @@ fun UserProfileScreen(
                 1 -> if (isBlocked && !blockedContentRevealed) {
                     item { BlockedContentOverlay(onReveal = { blockedContentRevealed = true }) }
                 } else {
-                    if (replies.isEmpty()) {
+                    val displayReplies = if (repliesSortMode == ProfileSortMode.RECENCY) replies else sortedReplies
+                    if (repliesSortMode != ProfileSortMode.RECENCY && sortedReplies.isEmpty() && sortedRepliesLoading) {
+                        item {
+                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth().padding(32.dp)) {
+                                CircularProgressIndicator()
+                            }
+                        }
+                    } else if (repliesSortMode != ProfileSortMode.RECENCY && sortedReplies.isEmpty() && !sortedRepliesLoading) {
+                        item { FeedCrawlingMessage() }
+                    } else if (displayReplies.isEmpty()) {
                         item { EmptyTabContent("No replies yet") }
                     } else {
-                        items(items = replies, key = { it.id }) { event ->
+                        items(items = displayReplies, key = { it.id }) { event ->
                             val likeCount = reactionVersion.let { eventRepo?.getReactionCount(event.id) ?: 0 }
                             val replyCount = replyCountVersion.let { eventRepo?.getReplyCount(event.id) ?: 0 }
                             val repostCount2 = repostVersion.let { eventRepo?.getRepostCount(event.id) ?: 0 }
@@ -679,8 +765,10 @@ fun UserProfileScreen(
                                 onOpenEmojiLibrary = onOpenEmojiLibrary
                             )
                         }
-                        item {
-                            LoadMoreButton(onClick = { viewModel.loadMoreReplies() })
+                        if (repliesSortMode == ProfileSortMode.RECENCY) {
+                            item {
+                                LoadMoreButton(onClick = { viewModel.loadMoreReplies() })
+                            }
                         }
                     }
                 }
@@ -717,6 +805,26 @@ fun UserProfileScreen(
                     }
                 }
                 4 -> {
+                    if (followersLoading && followers.isEmpty()) {
+                        item {
+                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth().padding(32.dp)) {
+                                CircularProgressIndicator()
+                            }
+                        }
+                    } else if (followers.isEmpty()) {
+                        item { EmptyTabContent("No followers found") }
+                    } else {
+                        items(items = followers, key = { it.pubkey }) { followerProfile ->
+                            FollowerRow(
+                                profile = followerProfile,
+                                isFollowing = myFollowList.any { it.pubkey == followerProfile.pubkey },
+                                onToggleFollow = { onToggleFollow?.invoke(followerProfile.pubkey) },
+                                onClick = { onNavigateToProfile?.invoke(followerProfile.pubkey) }
+                            )
+                        }
+                    }
+                }
+                5 -> {
                     if (relayList.isEmpty() && relayHints.isEmpty()) {
                         item { EmptyTabContent("No relay list published") }
                     } else {
@@ -1272,6 +1380,57 @@ private fun LoadMoreButton(onClick: () -> Unit) {
         OutlinedButton(onClick = onClick) {
             Text("Load More")
         }
+    }
+}
+
+@Composable
+private fun FollowerRow(
+    profile: ProfileData,
+    isFollowing: Boolean,
+    onToggleFollow: () -> Unit,
+    onClick: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+    ) {
+        ProfilePicture(url = profile.picture, size = 40)
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = profile.displayString,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(Modifier.width(8.dp))
+        FollowButton(isFollowing = isFollowing, onClick = onToggleFollow)
+    }
+}
+
+@Composable
+private fun FeedCrawlingMessage() {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 32.dp, vertical = 40.dp)
+    ) {
+        Text(
+            text = "Still crawling or account too new",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            text = "No ranked results yet. Check back later.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
