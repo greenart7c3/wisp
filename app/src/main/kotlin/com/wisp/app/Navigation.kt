@@ -362,7 +362,11 @@ fun WispNavHost(
 
     // Initialize notifications viewmodel with shared repos
     LaunchedEffect(Unit) {
-        notificationsViewModel.init(feedViewModel.notifRepo, feedViewModel.eventRepo, feedViewModel.contactRepo)
+        notificationsViewModel.init(
+            feedViewModel.notifRepo, feedViewModel.eventRepo, feedViewModel.contactRepo,
+            feedViewModel.dmRepo, feedViewModel.relayPool, feedViewModel.relayListRepo,
+            feedViewModel.powPrefs
+        )
     }
 
     // Resolve deep link URI to a navigation route
@@ -466,6 +470,21 @@ fun WispNavHost(
     LaunchedEffect(Unit) {
         notificationsViewModel.replyReceived.collect {
             if (currentNotifSoundEnabled) HapticHelper.pulse()
+        }
+    }
+    LaunchedEffect(Unit) {
+        notificationsViewModel.dmReceived.collect {
+            isReplyAnimating = true
+            kotlinx.coroutines.delay(1000)
+            isReplyAnimating = false
+            if (currentNotifSoundEnabled) HapticHelper.pulse()
+        }
+    }
+    // Background decryption of pending DM gift wraps (remote signer mode)
+    val pendingDmCount by dmListViewModel.pendingDecryptCount.collectAsState()
+    LaunchedEffect(pendingDmCount, activeSigner) {
+        if (pendingDmCount > 0) {
+            activeSigner?.let { dmListViewModel.decryptPending(it) }
         }
     }
     LaunchedEffect(Unit) {
@@ -2142,6 +2161,9 @@ fun WispNavHost(
                             } catch (_: Exception) {}
                         }
                     }
+                },
+                onSendDm = { peerPubkey, content ->
+                    notificationsViewModel.sendDm(peerPubkey, content, activeSigner)
                 }
             )
 
