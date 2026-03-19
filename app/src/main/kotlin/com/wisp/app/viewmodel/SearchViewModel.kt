@@ -126,33 +126,41 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
         _users.value = emptyList()
         _notes.value = emptyList()
 
-        val userFilter = Filter(kinds = listOf(0), search = trimmed, limit = 20)
-        val noteFilter = Filter(kinds = listOf(1), search = trimmed, limit = 50)
-
-        val userReq = ClientMessage.req(userSubId, userFilter)
-        val noteReq = ClientMessage.req(noteSubId, noteFilter)
-
+        val activeFilter = _filter.value
         val relaysToQuery = when (_selectedRelayOption.value) {
             RelayOption.DEFAULT -> listOf(DEFAULT_SEARCH_RELAY)
             RelayOption.ALL_RELAYS -> _searchRelays.value
             RelayOption.INDIVIDUAL -> listOfNotNull(_selectedRelayUrl.value)
         }
 
-        for (url in relaysToQuery) {
-            relayPool.sendToRelayOrEphemeral(url, userReq)
-            relayPool.sendToRelayOrEphemeral(url, noteReq)
+        val activeSubId = when (activeFilter) {
+            SearchFilter.PEOPLE -> {
+                val userFilter = Filter(kinds = listOf(0), search = trimmed, limit = 20)
+                val userReq = ClientMessage.req(userSubId, userFilter)
+                for (url in relaysToQuery) {
+                    relayPool.sendToRelayOrEphemeral(url, userReq)
+                }
+                userSubId
+            }
+            SearchFilter.NOTES -> {
+                val noteFilter = Filter(kinds = listOf(1), search = trimmed, limit = 50)
+                val noteReq = ClientMessage.req(noteSubId, noteFilter)
+                for (url in relaysToQuery) {
+                    relayPool.sendToRelayOrEphemeral(url, noteReq)
+                }
+                noteSubId
+            }
         }
 
         val seenUserPubkeys = mutableSetOf<String>()
         val seenNoteIds = mutableSetOf<String>()
-        var userEose = false
-        var noteEose = false
 
         searchJob = viewModelScope.launch {
             val eventJob = launch {
                 relayPool.relayEvents.collect { relayEvent ->
-                    when (relayEvent.subscriptionId) {
-                        userSubId -> {
+                    if (relayEvent.subscriptionId != activeSubId) return@collect
+                    when (activeFilter) {
+                        SearchFilter.PEOPLE -> {
                             val event = relayEvent.event
                             if (event.kind == 0 && event.pubkey !in seenUserPubkeys) {
                                 if (muteRepo?.isBlocked(event.pubkey) == true) return@collect
@@ -164,7 +172,7 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
                                 }
                             }
                         }
-                        noteSubId -> {
+                        SearchFilter.NOTES -> {
                             val event = relayEvent.event
                             if (event.kind == 1 && event.id !in seenNoteIds) {
                                 if (muteRepo?.isBlocked(event.pubkey) == true) return@collect
@@ -179,11 +187,7 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
 
             val eoseJob = launch {
                 relayPool.eoseSignals.collect { subId ->
-                    when (subId) {
-                        userSubId -> userEose = true
-                        noteSubId -> noteEose = true
-                    }
-                    if (userEose && noteEose) {
+                    if (subId == activeSubId) {
                         _isSearching.value = false
                     }
                 }
