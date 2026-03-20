@@ -349,7 +349,7 @@ fun WispDrawerContent(
         )
         NavigationDrawerItem(
             icon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
-            label = { Text("Drafts") },
+            label = { Text("Drafts & Scheduled") },
             selected = false,
             onClick = onDrafts,
             modifier = Modifier.padding(horizontal = 12.dp)

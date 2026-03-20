@@ -84,6 +84,17 @@ class RelayPool {
         Log.d("RelayPool", "AUTH denied for ${request.relayUrl}")
     }
 
+    fun isAuthenticated(url: String): Boolean = url in authenticatedRelays
+
+    /**
+     * Pre-approve auth for a relay (e.g. scheduler relay) so that when it sends an AUTH
+     * challenge it is auto-signed without prompting the user. Must be called before connecting.
+     */
+    fun autoApproveRelayAuth(url: String) {
+        dmDeliveryTargets.add(url)
+        userApprovedAuthRelays.add(url)
+    }
+
     /**
      * Ensure the OkHttpClient matches the current Tor state.
      * If Tor was enabled/disabled since the client was built, rebuild it.
@@ -730,6 +741,27 @@ class RelayPool {
     /** Remove a tracked subscription for a relay. */
     private fun untrackSubscription(relayUrl: String, subId: String) {
         activeSubscriptions[relayUrl]?.remove(subId)
+    }
+
+    /**
+     * Open a connection to a relay without sending any messages — useful to trigger the AUTH
+     * handshake before sending an event that requires authentication.
+     */
+    fun connectEphemeralRelay(url: String) {
+        ensureClientCurrent()
+        if (url in blockedUrls) return
+        if (!RelayConfig.isConnectableUrl(url)) return
+        if (ephemeralRelays.containsKey(url) || relayIndex.containsKey(url)) return
+        if (ephemeralRelays.size >= MAX_EPHEMERAL) return
+        ephemeralRelays.computeIfAbsent(url) {
+            val relay = Relay(RelayConfig(url, read = true, write = false), client)
+            wireByteTracking(relay)
+            relayIndex[url] = relay
+            collectMessages(relay)
+            relay.connect()
+            relay
+        }
+        ephemeralLastUsed[url] = System.currentTimeMillis()
     }
 
     fun sendToRelayOrEphemeral(url: String, message: String, skipBadCheck: Boolean = false): Boolean {

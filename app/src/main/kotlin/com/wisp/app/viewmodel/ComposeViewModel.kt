@@ -34,7 +34,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private val NOSTR_URI_REGEX = Regex("nostr:(npub1[a-z0-9]{58}|nprofile1[a-z0-9]+|note1[a-z0-9]{58}|nevent1[a-z0-9]+)")
 // Matches bare bech32 IDs not already preceded by "nostr:" or embedded in a URL
@@ -480,6 +482,14 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             val msg = ClientMessage.event(event)
             var sentCount = 0
             for (url in SCHEDULER_RELAYS) {
+                // Pre-approve auth so the relay auto-signs without prompting
+                relayPool.autoApproveRelayAuth(url)
+                // Connect without sending anything — relay will issue AUTH challenge on open
+                relayPool.connectEphemeralRelay(url)
+                // Wait for auth to complete before sending the EVENT (up to 5s)
+                withTimeoutOrNull(5_000) {
+                    relayPool.authCompleted.first { it == url }
+                }
                 if (relayPool.sendToRelayOrEphemeral(url, msg, skipBadCheck = true)) sentCount++
             }
             if (sentCount == 0) {
