@@ -290,13 +290,19 @@ class StartupCoordinator(
             }
         }
 
-        // Periodic relay list refresh (every 30 minutes)
+        // Periodic relay list refresh: check every 30 min, but only do a full network fetch
+        // when the cache has gone stale (> FRESHNESS_MS). New follows are fetched immediately
+        // via the followWatcher below, so the background loop is purely for staleness.
         relayListRefreshJob = scope.launch {
             while (true) {
                 delay(30 * 60 * 1000L)
-                fetchRelayListsForFollows()
-                delay(15_000)
-                recomputeAndMergeRelays()
+                val authors = contactRepo.getFollowList().map { it.pubkey }
+                if (authors.isNotEmpty() && !relayListRepo.isSyncFresh()) {
+                    outboxRouter.requestAllRelayLists(authors)
+                    delay(15_000)
+                    recomputeAndMergeRelays()
+                    relayListRepo.markSyncComplete()
+                }
             }
         }
 
@@ -334,7 +340,12 @@ class StartupCoordinator(
                 val myPubkey = getUserPubkey() ?: return@collect
                 val dmRelayUrls = relayPool.getDmRelayUrls()
                 if (relayUrl in dmRelayUrls || relayUrl in relayPool.getRelayUrls()) {
-                    val dmFilter = Filter(kinds = listOf(1059), pTags = listOf(myPubkey))
+                    val latestGwrapTs = dmRepo.getLatestGiftWrapTimestamp()
+                    val dmFilter = if (latestGwrapTs != null) {
+                        Filter(kinds = listOf(1059), pTags = listOf(myPubkey), since = latestGwrapTs - 2 * 24 * 3600L)
+                    } else {
+                        Filter(kinds = listOf(1059), pTags = listOf(myPubkey))
+                    }
                     relayPool.sendToRelay(relayUrl, ClientMessage.req("dms", dmFilter))
                 }
             }
@@ -403,6 +414,7 @@ class StartupCoordinator(
                             delay(200)
                         }
                         subManager.closeSubscription("relay-lists")
+                        relayListRepo.markSyncComplete()
                     }
 
                     recomputeAndMergeRelays()
@@ -634,7 +646,14 @@ class StartupCoordinator(
     fun subscribeDmsAndNotifications(myPubkey: String) {
         notifRepo.soundEligibleAfter = System.currentTimeMillis() / 1000
         dmRepo.soundEligibleAfter = System.currentTimeMillis() / 1000
-        val dmFilter = Filter(kinds = listOf(1059), pTags = listOf(myPubkey))
+        // Use `since` if we've seen gift wraps before, subtracting 2 days to account for
+        // NIP-17's randomized gift wrap timestamps (which can be up to 2 days before actual send time).
+        val latestGiftWrapTs = dmRepo.getLatestGiftWrapTimestamp()
+        val dmFilter = if (latestGiftWrapTs != null) {
+            Filter(kinds = listOf(1059), pTags = listOf(myPubkey), since = latestGiftWrapTs - 2 * 24 * 3600L)
+        } else {
+            Filter(kinds = listOf(1059), pTags = listOf(myPubkey))
+        }
         val dmReqMsg = ClientMessage.req("dms", dmFilter)
         relayPool.sendToAll(dmReqMsg)
         relayPool.sendToDmRelays(dmReqMsg)
@@ -643,10 +662,12 @@ class StartupCoordinator(
             Log.d("StartupCoord", "DM subscription (re)established")
         }
 
+        val latestNotifTs = notifRepo.getLatestNotifTimestamp()
         val notifFilter = Filter(
             kinds = listOf(1, 6, 7, 9735),
             pTags = listOf(myPubkey),
-            limit = 300
+            limit = 300,
+            since = latestNotifTs?.let { it - 5 * 60 }  // 5-min buffer for clock skew
         )
         val notifReqMsg = ClientMessage.req("notif", notifFilter)
         relayPool.sendToReadRelays(notifReqMsg)
@@ -674,10 +695,13 @@ class StartupCoordinator(
         // Fetch the user's own recent notes upfront so notification referenced events
         // (reactions, zaps, reposts all point at our events) are in cache before
         // engagement subscriptions start.
-        val selfNotesMsg = ClientMessage.req(
-            "self-notes",
+        val selfNotesSince = eventRepo.getLatestEventTimestamp(myPubkey, 1)
+        val selfNotesFilter = if (selfNotesSince != null) {
+            Filter(kinds = listOf(1), authors = listOf(myPubkey), since = selfNotesSince)
+        } else {
             Filter(kinds = listOf(1), authors = listOf(myPubkey), limit = 200)
-        )
+        }
+        val selfNotesMsg = ClientMessage.req("self-notes", selfNotesFilter)
         relayPool.sendToWriteRelays(selfNotesMsg)
         relayPool.sendToReadRelays(selfNotesMsg)
 
@@ -704,8 +728,9 @@ class StartupCoordinator(
         val myEventIds = eventRepo.getRecentEventIdsByAuthor(pk, limit = 100)
         if (myEventIds.isEmpty()) return
 
+        val since = notifRepo.getLatestNotifTimestamp()?.let { it - 5 * 60 }
         val filters = myEventIds.chunked(OutboxRouter.MAX_ETAGS_PER_FILTER).map { chunk ->
-            Filter(kinds = listOf(1), eTags = chunk, limit = 200)
+            Filter(kinds = listOf(1), eTags = chunk, limit = 200, since = since)
         }
         val replyReqMsg = if (filters.size == 1) ClientMessage.req("notif-replies-etag", filters[0])
         else ClientMessage.req("notif-replies-etag", filters)
@@ -726,7 +751,7 @@ class StartupCoordinator(
         }
         // Also subscribe for quotes of our posts via #q tags
         val quoteFilters = myEventIds.chunked(OutboxRouter.MAX_ETAGS_PER_FILTER).map { chunk ->
-            Filter(kinds = listOf(1), qTags = chunk, limit = 200)
+            Filter(kinds = listOf(1), qTags = chunk, limit = 200, since = since)
         }
         val quoteReqMsg = if (quoteFilters.size == 1) ClientMessage.req("notif-quotes-qtag", quoteFilters[0])
         else ClientMessage.req("notif-quotes-qtag", quoteFilters)

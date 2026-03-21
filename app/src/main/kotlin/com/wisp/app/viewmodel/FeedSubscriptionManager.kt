@@ -1,5 +1,6 @@
 package com.wisp.app.viewmodel
 
+import android.content.SharedPreferences
 import android.util.Log
 import com.wisp.app.nostr.ClientMessage
 import com.wisp.app.nostr.Filter
@@ -54,7 +55,8 @@ class FeedSubscriptionManager(
     private val metadataFetcher: MetadataFetcher,
     private val scope: CoroutineScope,
     private val processingContext: CoroutineContext,
-    private val pubkeyHex: String?
+    private val pubkeyHex: String?,
+    private val prefs: SharedPreferences
 ) {
     init {
         // Relay feed subs bypass RelayPool's seen-event dedup so events already
@@ -267,13 +269,18 @@ class FeedSubscriptionManager(
         eventRepo.countNewNotes = false
         feedEoseJob?.cancel()
 
-        // Always request the full 24h window. Relying on newestTimestamp from the current
-        // feed caused a race condition: premature subscribeFeed() calls (from followWatcherJob,
-        // connectivity changes, or lifecycle callbacks) would receive partial events, then the
-        // proper startup subscribeFeed() would use those events' timestamps as `since`, missing
-        // the full window. seenEventIds + feedIds dedup handles re-received events cheaply.
-        val sinceTimestamp = System.currentTimeMillis() / 1000 - 60 * 60 * 24
-        Log.d("RLC", "[FeedSub] resubscribeFeed: since=$sinceTimestamp (24h window)")
+        // For FOLLOWS/EXTENDED feeds, use the persisted latest-event timestamp from the previous
+        // session as `since`, capped at 24h ago. This avoids re-downloading thousands of events
+        // on every startup — only new posts since the last load are fetched. The 5-minute buffer
+        // covers relay clock skew. Relying on the *current* session's newest event would cause a
+        // race condition (premature resubscribeFeed() calls from followWatcherJob/connectivity
+        // changes get partial events first), so we only write the timestamp after EOSE.
+        // All other feed types (RELAY, LIST, TRENDING) ignore this and use their own windows.
+        val twentyFourHoursAgo = System.currentTimeMillis() / 1000 - 60 * 60 * 24
+        val savedFeedTs = prefs.getLong("latest_follows_feed_ts", 0L)
+        val sinceTimestamp = if (savedFeedTs > 0) maxOf(savedFeedTs - 5 * 60, twentyFourHoursAgo)
+                             else twentyFourHoursAgo
+        Log.d("RLC", "[FeedSub] resubscribeFeed: since=$sinceTimestamp (savedFeedTs=$savedFeedTs, 24hAgo=$twentyFourHoursAgo)")
         val indexerRelays = getIndexerRelays()
         val excludedUrls = getExcludedRelayUrls()
         val targetedRelays: Set<String> = when (_feedType.value) {
@@ -369,6 +376,10 @@ class FeedSubscriptionManager(
             Log.d("RLC", "[FeedSub] awaiting $eoseTarget/$connected EOSEs for feedSubId=$feedSubId")
             subManager.awaitEoseCount(feedSubId, eoseTarget)
             Log.d("RLC", "[FeedSub] EOSE received, feed loaded")
+            eventRepo.getNewestFeedEventTimestamp()?.let { ts ->
+                prefs.edit().putLong("latest_follows_feed_ts", ts).apply()
+                Log.d("RLC", "[FeedSub] saved latest_follows_feed_ts=$ts")
+            }
             _initialLoadDone.value = true
             _initLoadingState.value = InitLoadingState.Done
             onRelayFeedEose()
@@ -1057,12 +1068,13 @@ class FeedSubscriptionManager(
             eventsByAuthor.getOrPut(author) { mutableListOf() }.add(id)
         }
         val safetyNet = relayScoreBoard.getScoredRelays().take(5).map { it.url }
-        outboxRouter.subscribeEngagementByAuthors("engage-notif", eventsByAuthor, activeEngagementSubIds, safetyNet)
+        val since = notifRepo.getLatestNotifTimestamp()?.let { it - 5 * 60 }
+        outboxRouter.subscribeEngagementByAuthors("engage-notif", eventsByAuthor, activeEngagementSubIds, safetyNet, since)
 
         val zapSubId = "engage-notif-zap"
         activeEngagementSubIds.add(zapSubId)
         val zapFilters = eventIds.chunked(OutboxRouter.MAX_ETAGS_PER_FILTER).map { chunk ->
-            Filter(kinds = listOf(9735), eTags = chunk)
+            Filter(kinds = listOf(9735), eTags = chunk, since = since)
         }
         val zapMsg = if (zapFilters.size == 1) ClientMessage.req(zapSubId, zapFilters[0])
         else ClientMessage.req(zapSubId, zapFilters)

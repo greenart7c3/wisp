@@ -20,6 +20,7 @@ class DmRepository(context: Context? = null, pubkeyHex: String? = null) {
     private val prefs: SharedPreferences? =
         context?.getSharedPreferences("wisp_dm_${pubkeyHex ?: "anon"}", Context.MODE_PRIVATE)
     private var lastReadDmTimestamp: Long = prefs?.getLong("last_read_dm", 0L) ?: 0L
+    private var latestGiftWrapTs: Long = prefs?.getLong("latest_gwrap_ts", 0L) ?: 0L
     private val lock = Any()
     // No LRU eviction — DM conversations must never be silently dropped since there's no
     // persistence layer to recover them from, and seenEvents dedup blocks re-delivery.
@@ -157,6 +158,15 @@ class DmRepository(context: Context? = null, pubkeyHex: String? = null) {
         conversationKeyCache.put(pubkeyHex, key)
     }
 
+    fun getLatestGiftWrapTimestamp(): Long? = if (latestGiftWrapTs > 0) latestGiftWrapTs else null
+
+    fun updateLatestGiftWrapTimestamp(ts: Long) {
+        if (ts > latestGiftWrapTs) {
+            latestGiftWrapTs = ts
+            prefs?.edit()?.putLong("latest_gwrap_ts", ts)?.apply()
+        }
+    }
+
     fun markDmsRead() {
         _hasUnreadDms.value = false
         // Persist the latest message timestamp so we don't show stale indicators on relaunch
@@ -233,6 +243,7 @@ class DmRepository(context: Context? = null, pubkeyHex: String? = null) {
         _dmNotifications.value = emptyList()
         decryptingRefCount.set(0)
         soundEligibleAfter = System.currentTimeMillis() / 1000
+        latestGiftWrapTs = 0L
         prefs?.edit()?.clear()?.apply()
     }
 

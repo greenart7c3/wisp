@@ -373,6 +373,18 @@ class OutboxRouter(
     ): String? {
         val missingRelayLists = relayListRepo.getMissingPubkeys(pubkeys)
         val missingProfiles = pubkeys.filter { !profileRepo.has(it) }
+
+        // If relay lists are fully cached and recently synced, skip kind 10002 entirely —
+        // only fetch missing profiles. This avoids downloading 30k+ relay-list events on
+        // every startup just because profile data isn't persisted.
+        if (missingRelayLists.isEmpty() && relayListRepo.isSyncFresh()) {
+            Log.d("OutboxRouter", "requestRelayListsAndProfiles: relay lists fresh, " +
+                    "skipping kind 10002 — fetching ${missingProfiles.size} missing profiles only")
+            if (missingProfiles.isEmpty()) return null
+            sendChunkedToAll(subId, missingProfiles, listOf(Filter(kinds = listOf(0))))
+            return subId
+        }
+
         val allMissing = (missingRelayLists + missingProfiles).distinct()
         Log.d("OutboxRouter", "requestRelayListsAndProfiles: ${pubkeys.size} total, " +
                 "${missingRelayLists.size} missing relay lists, ${missingProfiles.size} missing profiles, " +
@@ -380,6 +392,17 @@ class OutboxRouter(
         if (allMissing.isEmpty()) return null
 
         sendChunkedToAll(subId, allMissing, listOf(Filter(kinds = listOf(0, 10002))))
+        return subId
+    }
+
+    /**
+     * Force-fetch kind 10002 relay lists for ALL [pubkeys], ignoring the local cache.
+     * Used by the background refresh loop to pick up relay list changes since last sync.
+     */
+    fun requestAllRelayLists(pubkeys: List<String>, subId: String = "relay-lists"): String? {
+        if (pubkeys.isEmpty()) return null
+        Log.d("OutboxRouter", "requestAllRelayLists: force-refreshing ${pubkeys.size} relay lists")
+        sendChunkedToAll(subId, pubkeys, listOf(Filter(kinds = listOf(10002))))
         return subId
     }
 
@@ -400,7 +423,8 @@ class OutboxRouter(
         prefix: String,
         eventsByAuthor: Map<String, List<String>>,
         activeSubIds: MutableList<String>,
-        safetyNetRelays: List<String> = emptyList()
+        safetyNetRelays: List<String> = emptyList(),
+        since: Long? = null
     ): Int {
         val targetedRelays = mutableSetOf<String>()
 
@@ -426,7 +450,7 @@ class OutboxRouter(
         for ((relayUrl, eventIds) in relayToEventIds) {
             val uniqueIds = eventIds.distinct()
             val filters = uniqueIds.chunked(MAX_ETAGS_PER_FILTER).map { chunk ->
-                Filter(kinds = listOf(1, 5, 6, 7, 1018, 9735), eTags = chunk, limit = 500)
+                Filter(kinds = listOf(1, 5, 6, 7, 1018, 9735), eTags = chunk, limit = 500, since = since)
             }
             val msg = if (filters.size == 1) ClientMessage.req(prefix, filters[0])
             else ClientMessage.req(prefix, filters)
@@ -439,7 +463,7 @@ class OutboxRouter(
         if (fallbackEventIds.isNotEmpty()) {
             val uniqueIds = fallbackEventIds.distinct()
             val filters = uniqueIds.chunked(MAX_ETAGS_PER_FILTER).map { chunk ->
-                Filter(kinds = listOf(1, 5, 6, 7, 1018, 9735), eTags = chunk, limit = 500)
+                Filter(kinds = listOf(1, 5, 6, 7, 1018, 9735), eTags = chunk, limit = 500, since = since)
             }
             val msg = if (filters.size == 1) ClientMessage.req(prefix, filters[0])
             else ClientMessage.req(prefix, filters)
@@ -452,7 +476,7 @@ class OutboxRouter(
             val allEventIds = eventsByAuthor.values.flatten().distinct()
             if (allEventIds.isNotEmpty()) {
                 val filters = allEventIds.chunked(MAX_ETAGS_PER_FILTER).map { chunk ->
-                    Filter(kinds = listOf(1, 5, 6, 7, 1018, 9735), eTags = chunk, limit = 500)
+                    Filter(kinds = listOf(1, 5, 6, 7, 1018, 9735), eTags = chunk, limit = 500, since = since)
                 }
                 val msg = if (filters.size == 1) ClientMessage.req(prefix, filters[0])
                 else ClientMessage.req(prefix, filters)

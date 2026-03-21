@@ -252,7 +252,8 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     val feedSub: FeedSubscriptionManager = FeedSubscriptionManager(
         relayPool, outboxRouter, subManager, eventRepo, contactRepo, listRepo, notifRepo,
         extendedNetworkRepo, keyRepo, healthTracker, relayScoreBoard, profileRepo,
-        metadataFetcher, viewModelScope, processingDispatcher, pubkeyHex
+        metadataFetcher, viewModelScope, processingDispatcher, pubkeyHex,
+        getApplication<Application>().getSharedPreferences("wisp_feed", android.content.Context.MODE_PRIVATE)
     )
 
     val eventRouter: EventRouter = EventRouter(

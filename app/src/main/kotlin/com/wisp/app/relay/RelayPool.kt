@@ -140,6 +140,8 @@ class RelayPool {
     private val seenLock = Any()
     @Volatile private var feedEventCounter = 0
     @Volatile private var feedEventDedupCounter = 0
+    private val subEventCounts = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
+    private val subStartTimes  = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     /** Relay URL → Relay index for O(1) lookup across all pools. */
     private val relayIndex = java.util.concurrent.ConcurrentHashMap<String, Relay>()
@@ -343,6 +345,7 @@ class RelayPool {
                             }
                             _events.tryEmit(msg.event)
                             _relayEvents.tryEmit(RelayEvent(msg.event, relay.config.url, msg.subscriptionId))
+                            subEventCounts.getOrPut(msg.subscriptionId) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()
                             if (msg.subscriptionId.startsWith("feed")) {
                                 val count = ++feedEventCounter
                                 if (count == 1 || count % 50 == 0) {
@@ -359,9 +362,9 @@ class RelayPool {
                         unsupportedCounts.remove(relay.config.url) // Relay works, clear counter
                     }
                     is RelayMessage.Eose -> {
-                        if (msg.subscriptionId.startsWith("feed")) {
-                            Log.d("RLC", "[Pool] feed EOSE from ${relay.config.url} (total feed events=$feedEventCounter deduped=$feedEventDedupCounter)")
-                        }
+                        val count   = subEventCounts[msg.subscriptionId]?.get() ?: 0
+                        val elapsed = subStartTimes[msg.subscriptionId]?.let { System.currentTimeMillis() - it } ?: -1L
+                        Log.d("SUBLOG", "EOSE sub=${msg.subscriptionId} relay=${relay.config.url}: $count events in ${elapsed}ms")
                         _eoseSignals.tryEmit(msg.subscriptionId)
                         unsupportedCounts.remove(relay.config.url) // Relay works, clear counter
                     }
@@ -637,7 +640,10 @@ class RelayPool {
                 sentCount++
             }
         }
-        if (subId != null) Log.d("RLC", "[Pool] sendToReadRelays sub=$subId → $sentCount relays")
+        if (subId != null) {
+            logSubStart(subId, message)
+            Log.d("RLC", "[Pool] sendToReadRelays sub=$subId → $sentCount relays")
+        }
     }
 
     fun sendToAll(message: String) {
@@ -652,7 +658,10 @@ class RelayPool {
             relay.send(message)
             sentCount++
         }
-        if (subId != null) Log.d("RLC", "[Pool] sendToAll sub=$subId → $sentCount relays")
+        if (subId != null) {
+            logSubStart(subId, message)
+            Log.d("RLC", "[Pool] sendToAll sub=$subId → $sentCount relays")
+        }
     }
 
     /** Mark which relay URLs are the user's own pinned relays (from NIP-65). */
@@ -695,7 +704,10 @@ class RelayPool {
                 sentCount++
             }
         }
-        if (subId != null) Log.d("RLC", "[Pool] sendToTopRelays sub=$subId → $sentCount/$maxRelays relays")
+        if (subId != null) {
+            logSubStart(subId, message)
+            Log.d("RLC", "[Pool] sendToTopRelays sub=$subId → $sentCount/$maxRelays relays")
+        }
         return sentCount
     }
 
@@ -715,6 +727,7 @@ class RelayPool {
         } else {
             val sent = relay.send(message)
             if (subId != null) {
+                logSubStart(subId, message)
                 Log.d("RLC", "[Pool] sendToRelay($url) sub=$subId sent=$sent connected=${relay.isConnected}")
             }
         }
@@ -726,6 +739,14 @@ class RelayPool {
         val start = 8 // after ["REQ","
         val end = message.indexOf('"', start)
         return if (end > start) message.substring(start, end) else null
+    }
+
+    private fun logSubStart(subId: String, message: String) {
+        if (subStartTimes.putIfAbsent(subId, System.currentTimeMillis()) != null) return // already logged
+        // message format: ["REQ","subId",{filter...}]
+        val filterStart = 8 + subId.length + 2  // skip past ["REQ","<subId>",
+        val filterSummary = if (filterStart < message.length) message.substring(filterStart).take(300) else "(none)"
+        Log.d("SUBLOG", "NEW sub=$subId | $filterSummary")
     }
 
     /** Track a REQ message for a relay so it can be re-sent on reconnect. */
@@ -829,6 +850,7 @@ class RelayPool {
             if (!subscriptionTracker.hasCapacity(url, subId)) return false
             subscriptionTracker.track(url, subId)
             trackSubscription(url, subId, message)
+            logSubStart(subId, message)
         }
         ephemeralLastUsed[url] = System.currentTimeMillis()
         val sent = ephemeral.send(message)

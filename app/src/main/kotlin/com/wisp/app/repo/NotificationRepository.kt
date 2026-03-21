@@ -58,12 +58,15 @@ class NotificationRepository(
     @Volatile var isViewing: Boolean = false
 
     private var lastReadTimestamp: Long = prefs.getLong(KEY_LAST_READ, 0L)
+    private var latestNotifTs: Long = prefs.getLong(KEY_LATEST_NOTIF_TS, 0L)
 
     private val _replyReceived = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val replyReceived: SharedFlow<Unit> = _replyReceived
 
     private val _notifReceived = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val notifReceived: SharedFlow<Unit> = _notifReceived
+
+    fun getLatestNotifTimestamp(): Long? = if (latestNotifTs > 0) latestNotifTs else null
 
     fun addEvent(event: NostrEvent, myPubkey: String, replyToMyEvent: Boolean = false, source: String = "") {
         if (event.pubkey == myPubkey) return
@@ -107,6 +110,10 @@ class NotificationRepository(
             // subscriptions bypass RelayPool dedup).
             if (seenEvents.get(event.id) != null) return
             seenEvents.put(event.id, true)
+            if (event.created_at > latestNotifTs) {
+                latestNotifTs = event.created_at
+                prefs.edit().putLong(KEY_LATEST_NOTIF_TS, event.created_at).apply()
+            }
 
             val threadRoot = resolveThreadRoot(event)
             if (threadRoot != null && muteRepo?.isThreadMuted(threadRoot) == true) return
@@ -187,6 +194,7 @@ class NotificationRepository(
             _hasUnread.value = false
             soundEligibleAfter = System.currentTimeMillis() / 1000
         }
+        latestNotifTs = 0L
         prefs.edit().clear().apply()
     }
 
@@ -696,6 +704,7 @@ class NotificationRepository(
 
     companion object {
         private const val KEY_LAST_READ = "last_read_timestamp"
+        private const val KEY_LATEST_NOTIF_TS = "latest_notif_ts"
         private const val RECENT_WINDOW_SECONDS = 600L // 10 minutes
         private const val SUMMARY_WINDOW_SECONDS = 86400L // 24 hours
     }

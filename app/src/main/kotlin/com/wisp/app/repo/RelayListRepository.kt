@@ -12,6 +12,12 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 class RelayListRepository(context: Context) {
+    companion object {
+        /** Re-fetch all relay lists from the network after this much time has passed. */
+        const val FRESHNESS_MS = 6L * 60 * 60 * 1000  // 6 hours
+        private const val SYNC_TIME_KEY = "sync_time"
+    }
+
     private val prefs: SharedPreferences =
         context.getSharedPreferences("wisp_relay_lists", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
@@ -75,6 +81,17 @@ class RelayListRepository(context: Context) {
 
     fun getMissingPubkeys(pubkeys: List<String>): List<String> =
         pubkeys.filter { cache.get(it) == null }
+
+    /** True if a full relay-list sync completed within [FRESHNESS_MS]. */
+    fun isSyncFresh(): Boolean {
+        val last = prefs.getLong(SYNC_TIME_KEY, 0L)
+        return last > 0L && System.currentTimeMillis() - last < FRESHNESS_MS
+    }
+
+    /** Record that a full relay-list network fetch just completed. */
+    fun markSyncComplete() {
+        prefs.edit().putLong(SYNC_TIME_KEY, System.currentTimeMillis()).apply()
+    }
 
     fun clear() {
         cache.evictAll()

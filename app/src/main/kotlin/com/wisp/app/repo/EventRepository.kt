@@ -498,6 +498,13 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
             .toList()
     }
 
+    fun getLatestEventTimestamp(pubkey: String, kind: Int): Long? {
+        return eventCache.snapshot().values
+            .asSequence()
+            .filter { it.pubkey == pubkey && it.kind == kind }
+            .maxOfOrNull { it.created_at }
+    }
+
     fun cacheEvent(event: NostrEvent) {
         if (eventCache.get(event.id) != null) return  // already cached
         seenEventIds.add(event.id)
@@ -826,6 +833,12 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
         val raw = synchronized(feedList) { feedList.toList() }
         _feed.value = if (filter == null) raw else raw.filter {
             it.pubkey in filter || isRepostedByAny(it.id, filter)
+        }
+    }
+
+    fun getNewestFeedEventTimestamp(): Long? {
+        return synchronized(feedList) {
+            feedList.maxOfOrNull { it.created_at }
         }
     }
 
