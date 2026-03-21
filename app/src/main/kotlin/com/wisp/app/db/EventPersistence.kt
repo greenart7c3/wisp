@@ -147,6 +147,22 @@ class EventPersistence(
         }
     }
 
+    /** Query recent notification-relevant events (kinds 1, 6, 7, 9735) for seeding NotificationRepository. */
+    fun getRecentNotificationEvents(limit: Int = 500): List<NostrEvent> {
+        return try {
+            val entities = box.query(
+                EventEntity_.kind.oneOf(intArrayOf(1, 6, 7, 9735))
+            )
+                .order(EventEntity_.createdAt, io.objectbox.query.QueryBuilder.DESCENDING)
+                .build()
+                .use { it.find(0, limit.toLong()) }
+            entities.mapNotNull { it.toNostrEvent() }
+        } catch (e: Exception) {
+            Log.w("EventPersistence", "getRecentNotificationEvents failed: ${e.message}")
+            emptyList()
+        }
+    }
+
     /** Query all zap receipt events (kind 9735) from ObjectBox. */
     fun getZapReceipts(limit: Int = 500): List<NostrEvent> {
         return try {
