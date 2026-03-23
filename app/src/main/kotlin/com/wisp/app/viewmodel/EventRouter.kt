@@ -70,6 +70,14 @@ class EventRouter(
     private val getIsTrendingFeed: () -> Boolean,
     private val onRelayFeedEventReceived: () -> Unit
 ) {
+    /**
+     * IDs of the user's own recent events used to build the notif-replies-etag subscription.
+     * Updated by StartupCoordinator whenever the subscription is refreshed.
+     * Used to verify that an event from notif-replies-etag is a DIRECT reply to one of our
+     * posts, not just a nested reply in a thread we started.
+     */
+    @Volatile var myOwnEventIds: Set<String> = emptySet()
+
     // Track newest created_at per (pubkey, kind) to prevent stale overwrites
     // when the same self-data event arrives from multiple relays.
     private val selfDataTimestamps = ConcurrentHashMap<String, Long>()
@@ -132,11 +140,16 @@ class EventRouter(
             val myPubkey = getUserPubkey()
             if (myPubkey != null && event.kind == 1) {
                 eventRepo.cacheEvent(event)
-                if (!Nip10.isStandaloneQuote(event)) {
-                    val parentId = Nip10.getReplyTarget(event)
-                    if (parentId != null) eventRepo.addReplyCount(parentId, event.id)
-                }
-                notifRepo.addEvent(event, myPubkey, replyToMyEvent = true, source = "notif-replies-etag")
+                val parentId = if (!Nip10.isStandaloneQuote(event)) {
+                    Nip10.getReplyTarget(event)
+                } else null
+                if (parentId != null) eventRepo.addReplyCount(parentId, event.id)
+                // Only bypass the p-tag check if this is a DIRECT reply to one of our own
+                // events. The #e subscription also returns nested thread replies (where our
+                // event is the root ancestor but not the direct parent) — those should not
+                // be unconditionally accepted without a p-tag.
+                val isDirectReplyToMe = parentId != null && parentId in myOwnEventIds
+                notifRepo.addEvent(event, myPubkey, replyToMyEvent = isDirectReplyToMe, source = "notif-replies-etag")
                 if (eventRepo.getProfileData(event.pubkey) == null) {
                     metadataFetcher.addToPendingProfiles(event.pubkey)
                 }

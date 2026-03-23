@@ -29,6 +29,13 @@ class NotificationRepository(
 
     private val seenEvents = LruCache<String, Boolean>(2000)
 
+    /**
+     * IDs of the user's own recent events, mirrored from EventRouter.myOwnEventIds.
+     * Used as a fallback ownership check when the referenced event has been evicted
+     * from the LRU cache (so eventRepo.getEvent() returns null).
+     */
+    @Volatile var myOwnEventIds: Set<String> = emptySet()
+
     private val lock = Any()
     private val groupMap = mutableMapOf<String, NotificationGroup>()
     private val zapEventIdsByGroup = mutableMapOf<String, MutableSet<String>>()
@@ -90,15 +97,24 @@ class NotificationRepository(
         // Reactions, reposts, and zaps: only notify if the referenced event is ours.
         // A p-tag on these events can come from thread inheritance (the original note
         // being reacted to was in a thread the user participated in), so a p-tag match
-        // alone is not sufficient. If the referenced event is cached and belongs to
-        // someone else, this is activity on another person's post — skip it.
+        // alone is not sufficient.
+        // If the referenced event is cached we can check authorship directly. If it has
+        // been evicted from the LRU cache, we fall back to myOwnEventIds (the set of IDs
+        // used to build the notif-replies-etag subscription) — if the ID is not there
+        // either, we reject rather than risk a false positive.
         if (event.kind == 6 || event.kind == 7 || event.kind == 9735) {
             val referencedId = event.tags.lastOrNull { it.size >= 2 && it[0] == "e" }?.get(1)
             val referencedEvent = referencedId?.let { eventRepo?.getEvent(it) }
-            if (referencedEvent != null && referencedEvent.pubkey != myPubkey) {
+            val isOwnEvent = when {
+                referencedEvent != null -> referencedEvent.pubkey == myPubkey
+                referencedId != null -> referencedId in myOwnEventIds
+                else -> false
+            }
+            if (!isOwnEvent) {
                 if (DiagnosticLogger.isEnabled) {
+                    val refOwner = referencedEvent?.pubkey?.take(8) ?: if (referencedId != null) "not_cached" else "no_ref"
                     DiagnosticLogger.log("NOTIF", "REJECTED:not_our_event id=${event.id.take(12)} kind=${event.kind} " +
-                        "refId=${referencedId?.take(12)} refOwner=${referencedEvent.pubkey.take(8)} source=$source")
+                        "refId=${referencedId?.take(12)} refOwner=$refOwner source=$source")
                 }
                 return
             }
@@ -135,6 +151,7 @@ class NotificationRepository(
                     when {
                         refEvent?.pubkey == myPubkey -> "cached_ours"
                         refEvent != null -> "cached_others"
+                        refId != null && refId in myOwnEventIds -> "fallback_ours"
                         else -> "not_cached"
                     }
                 } else "n/a"

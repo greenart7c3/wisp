@@ -734,6 +734,12 @@ class StartupCoordinator(
         val pk = myPubkey ?: return
         val myEventIds = eventRepo.getRecentEventIdsByAuthor(pk, limit = 100)
         if (myEventIds.isEmpty()) return
+        // Publish the set so EventRouter and NotificationRepository can verify direct
+        // reply targets and ownership of reactions/reposts whose referenced event has
+        // been evicted from the LRU cache.
+        val myEventIdSet = myEventIds.toSet()
+        eventRouter.myOwnEventIds = myEventIdSet
+        notifRepo.myOwnEventIds = myEventIdSet
 
         val since = notifRepo.getLatestNotifTimestamp()?.let { it - 5 * 60 }
         val filters = myEventIds.chunked(OutboxRouter.MAX_ETAGS_PER_FILTER).map { chunk ->
