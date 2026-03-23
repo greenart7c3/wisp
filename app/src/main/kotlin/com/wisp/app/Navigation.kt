@@ -1332,7 +1332,6 @@ fun WispNavHost(
                     tag = tag,
                     relayPool = feedViewModel.relayPool,
                     eventRepo = feedViewModel.eventRepo,
-                    topRelayUrls = feedViewModel.getScoredRelays().take(10).map { it.url },
                     muteRepo = feedViewModel.muteRepo
                 )
             }
@@ -1424,7 +1423,6 @@ fun WispNavHost(
                     name = name,
                     relayPool = feedViewModel.relayPool,
                     eventRepo = feedViewModel.eventRepo,
-                    topRelayUrls = feedViewModel.getScoredRelays().take(10).map { it.url },
                     muteRepo = feedViewModel.muteRepo
                 )
             }

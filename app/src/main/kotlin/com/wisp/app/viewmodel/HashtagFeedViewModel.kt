@@ -38,7 +38,6 @@ class HashtagFeedViewModel(app: Application) : AndroidViewModel(app) {
     private var loadJob: Job? = null
     private var muteObserverJob: Job? = null
     private val activeSubIds = mutableListOf<String>()
-    private var topRelayUrls: List<String> = emptyList()
     private var loadCounter = 0
     private var noteSub = "hashtag-notes-0"
     private var engagePrefix = "hashtag-engage-0"
@@ -47,11 +46,10 @@ class HashtagFeedViewModel(app: Application) : AndroidViewModel(app) {
         tag: String,
         relayPool: RelayPool,
         eventRepo: EventRepository,
-        topRelayUrls: List<String> = emptyList(),
         muteRepo: MuteRepository? = null
     ) {
         _setName.value = null
-        loadTags(listOf(tag), tag, relayPool, eventRepo, topRelayUrls, muteRepo)
+        loadTags(listOf(tag), tag, relayPool, eventRepo, muteRepo)
     }
 
     fun loadHashtags(
@@ -59,11 +57,10 @@ class HashtagFeedViewModel(app: Application) : AndroidViewModel(app) {
         name: String,
         relayPool: RelayPool,
         eventRepo: EventRepository,
-        topRelayUrls: List<String> = emptyList(),
         muteRepo: MuteRepository? = null
     ) {
         _setName.value = name
-        loadTags(tags, tags.firstOrNull() ?: "", relayPool, eventRepo, topRelayUrls, muteRepo)
+        loadTags(tags, tags.firstOrNull() ?: "", relayPool, eventRepo, muteRepo)
     }
 
     private fun loadTags(
@@ -71,7 +68,6 @@ class HashtagFeedViewModel(app: Application) : AndroidViewModel(app) {
         displayTag: String,
         relayPool: RelayPool,
         eventRepo: EventRepository,
-        topRelayUrls: List<String> = emptyList(),
         muteRepo: MuteRepository? = null
     ) {
         if (tags.isEmpty()) return
@@ -84,7 +80,6 @@ class HashtagFeedViewModel(app: Application) : AndroidViewModel(app) {
         _isLoading.value = true
         relayPoolRef = relayPool
         eventRepoRef = eventRepo
-        this.topRelayUrls = topRelayUrls
 
         muteObserverJob?.cancel()
         if (muteRepo != null) {
@@ -139,9 +134,6 @@ class HashtagFeedViewModel(app: Application) : AndroidViewModel(app) {
             activeSubIds.add(currentNoteSub)
 
             relayPool.sendToRelayOrEphemeral(SearchViewModel.DEFAULT_SEARCH_RELAY, noteReq)
-            for (url in topRelayUrls) {
-                relayPool.sendToRelayOrEphemeral(url, noteReq)
-            }
 
             // Wait for EOSE or timeout, then subscribe engagement
             withTimeoutOrNull(5_000) {
@@ -175,9 +167,6 @@ class HashtagFeedViewModel(app: Application) : AndroidViewModel(app) {
                 Filter(kinds = listOf(9735), eTags = batch),
                 Filter(kinds = listOf(1), eTags = batch)
             )
-            for (url in topRelayUrls) {
-                relayPool.sendToRelayOrEphemeral(url, ClientMessage.req(subId, filters))
-            }
             relayPool.sendToRelayOrEphemeral(SearchViewModel.DEFAULT_SEARCH_RELAY, ClientMessage.req(subId, filters))
         }
     }
