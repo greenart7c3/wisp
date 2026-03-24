@@ -120,6 +120,7 @@ class SocialActionManager(
     fun muteThread(rootEventId: String) {
         muteRepo.muteThread(rootEventId)
         notifRepo.purgeThread(rootEventId)
+        eventRepo.purgeThread(rootEventId)
     }
 
     fun updateMutedWords() {
