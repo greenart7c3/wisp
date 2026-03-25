@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import android.util.LruCache
 import com.wisp.app.nostr.DmConversation
 import com.wisp.app.nostr.DmMessage
+import com.wisp.app.nostr.DmReaction
+import com.wisp.app.nostr.DmZap
 import com.wisp.app.nostr.NostrEvent
 import com.wisp.app.nostr.wipe
 import com.wisp.app.nostr.FlatNotificationItem
@@ -15,9 +17,19 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.util.concurrent.ConcurrentHashMap
 
-class DmRepository(context: Context? = null, pubkeyHex: String? = null) {
-    private val myPubkey: String? = pubkeyHex
-    private val prefs: SharedPreferences? =
+class DmRepository(private val context: Context? = null, pubkeyHex: String? = null) {
+
+    companion object {
+        /**
+         * Stable conversation key computed from all participant pubkeys (including the
+         * local user's own pubkey). Sort + join so the same set always produces the same key.
+         */
+        fun conversationKey(participants: List<String>): String =
+            participants.toSortedSet().joinToString(",")
+    }
+
+    private var myPubkey: String? = pubkeyHex
+    private var prefs: SharedPreferences? =
         context?.getSharedPreferences("wisp_dm_${pubkeyHex ?: "anon"}", Context.MODE_PRIVATE)
     private var lastReadDmTimestamp: Long = prefs?.getLong("last_read_dm", 0L) ?: 0L
     private var latestGiftWrapTs: Long = prefs?.getLong("latest_gwrap_ts", 0L) ?: 0L
@@ -25,6 +37,8 @@ class DmRepository(context: Context? = null, pubkeyHex: String? = null) {
     // No LRU eviction — DM conversations must never be silently dropped since there's no
     // persistence layer to recover them from, and seenEvents dedup blocks re-delivery.
     private val conversations = ConcurrentHashMap<String, MutableList<DmMessage>>()
+    // Stores known participants for conversations (needed for empty group convos before first message)
+    private val conversationParticipants = ConcurrentHashMap<String, List<String>>()
     private val conversationKeyCache = object : LruCache<String, ByteArray>(200) {
         override fun entryRemoved(evicted: Boolean, key: String?, oldValue: ByteArray?, newValue: ByteArray?) {
             oldValue?.wipe()
@@ -32,6 +46,8 @@ class DmRepository(context: Context? = null, pubkeyHex: String? = null) {
     }
     // Maps giftWrapId → messageId so we can merge relay URLs on duplicate receipt
     private val seenGiftWraps = ConcurrentHashMap<String, String>()
+    // Maps rumorId → (convKey, msgId) for associating 9735 receipts with DM messages
+    private val rumorIdIndex = ConcurrentHashMap<String, Pair<String, String>>()
     private val dmRelayCache = LruCache<String, List<String>>(200)
 
     // Pending gift wraps for remote signer mode (stored raw, decrypted on demand)
@@ -78,13 +94,13 @@ class DmRepository(context: Context? = null, pubkeyHex: String? = null) {
         }
     }
 
-    fun addMessage(msg: DmMessage, peerPubkey: String) {
+    fun addMessage(msg: DmMessage, convKey: String) {
         var isNewIncoming = false
         synchronized(lock) {
             val existingMsgId = seenGiftWraps.get(msg.giftWrapId)
             if (existingMsgId != null) {
                 if (msg.relayUrls.isNotEmpty()) {
-                    mergeRelayUrlsLocked(peerPubkey, existingMsgId, msg.relayUrls)
+                    mergeRelayUrlsLocked(convKey, existingMsgId, msg.relayUrls)
                 }
                 return
             }
@@ -98,6 +114,7 @@ class DmRepository(context: Context? = null, pubkeyHex: String? = null) {
             if (incoming) {
                 val flatId = "dm:${msg.id}"
                 if (dmNotifIds.add(flatId)) {
+                    val peerPubkey = msg.participants.firstOrNull() ?: convKey
                     dmNotifItems.add(FlatNotificationItem(
                         id = flatId,
                         type = NotificationType.DM,
@@ -115,8 +132,14 @@ class DmRepository(context: Context? = null, pubkeyHex: String? = null) {
                 }
             }
 
-            val messages = conversations.get(peerPubkey) ?: mutableListOf<DmMessage>().also {
-                conversations.put(peerPubkey, it)
+            if (msg.participants.isNotEmpty()) {
+                conversationParticipants[convKey] = msg.participants
+            }
+            if (msg.rumorId.isNotEmpty()) {
+                rumorIdIndex[msg.rumorId] = Pair(convKey, msg.id)
+            }
+            val messages = conversations.get(convKey) ?: mutableListOf<DmMessage>().also {
+                conversations.put(convKey, it)
             }
             messages.add(msg)
             messages.sortBy { it.createdAt }
@@ -127,14 +150,109 @@ class DmRepository(context: Context? = null, pubkeyHex: String? = null) {
         updateConversationList()
     }
 
+    /** Look up which conversation/message owns a given rumorId (for associating 9735 receipts). */
+    fun findByRumorId(rumorId: String): Pair<String, String>? = rumorIdIndex[rumorId]
+
+    /**
+     * Add a zap receipt to the DM message identified by [messageId] (rumorId or internal id)
+     * in conversation [convKey].
+     */
+    fun addZap(convKey: String, messageId: String, zap: DmZap) {
+        synchronized(lock) {
+            val messages = conversations.get(convKey) ?: return
+            val idx = messages.indexOfFirst { it.rumorId == messageId || it.id == messageId }
+            if (idx < 0) return
+            val existing = messages[idx]
+            // Dedupe by zapperPubkey + timestamp
+            if (existing.zaps.any { it.zapperPubkey == zap.zapperPubkey && it.timestamp == zap.timestamp }) return
+            messages[idx] = existing.copy(zaps = existing.zaps + zap)
+
+            // Notify if the original message was sent by the local user
+            val isMine = myPubkey != null && existing.senderPubkey == myPubkey
+            if (isMine) {
+                val flatId = "dmzap:${zap.zapperPubkey}:${messageId}"
+                if (dmNotifIds.add(flatId)) {
+                    val peerPubkey = if (existing.participants.size > 1) convKey
+                                     else existing.participants.firstOrNull() ?: convKey
+                    dmNotifItems.add(FlatNotificationItem(
+                        id = flatId,
+                        type = NotificationType.DM_ZAP,
+                        actorPubkey = zap.zapperPubkey,
+                        referencedEventId = messageId,
+                        timestamp = zap.timestamp,
+                        zapSats = zap.sats,
+                        dmPeerPubkey = peerPubkey
+                    ))
+                    val sorted = dmNotifItems.sortedByDescending { it.timestamp }
+                    _dmNotifications.value = if (sorted.size > 200) sorted.take(200) else sorted
+                }
+            }
+        }
+        updateConversationList()
+    }
+
+    /**
+     * Add a private DM reaction to the message with [messageId] in conversation [convKey].
+     * If the original message was sent by the local user, also emits a DM_REACTION notification.
+     */
+    fun addReaction(convKey: String, messageId: String, reaction: DmReaction) {
+        synchronized(lock) {
+            val messages = conversations.get(convKey) ?: return
+            val idx = messages.indexOfFirst { it.rumorId == messageId || it.id == messageId }
+            if (idx < 0) return
+            val existing = messages[idx]
+            val alreadyReacted = existing.reactions.any {
+                it.authorPubkey == reaction.authorPubkey && it.emoji == reaction.emoji
+            }
+            if (alreadyReacted) return
+            messages[idx] = existing.copy(reactions = existing.reactions + reaction)
+
+            // Notify if the original message was sent by the local user
+            val isMine = myPubkey != null && existing.senderPubkey == myPubkey
+            if (isMine) {
+                val flatId = "dmreact:${reaction.authorPubkey}:${messageId}"
+                if (dmNotifIds.add(flatId)) {
+                    // For 1:1 use the peer pubkey; for group use the full convKey so
+                    // navigation can distinguish between single-pubkey and group routes.
+                    val peerPubkey = if (existing.participants.size > 1) convKey
+                                     else existing.participants.firstOrNull() ?: convKey
+                    dmNotifItems.add(FlatNotificationItem(
+                        id = flatId,
+                        type = NotificationType.DM_REACTION,
+                        actorPubkey = reaction.authorPubkey,
+                        referencedEventId = messageId,
+                        timestamp = reaction.timestamp,
+                        emoji = reaction.emoji,
+                        dmPeerPubkey = peerPubkey
+                    ))
+                    val sorted = dmNotifItems.sortedByDescending { it.timestamp }
+                    _dmNotifications.value = if (sorted.size > 200) sorted.take(200) else sorted
+                }
+            }
+        }
+        updateConversationList()
+    }
+
     /** Must be called while holding [lock]. */
-    private fun mergeRelayUrlsLocked(peerPubkey: String, messageId: String, newUrls: Set<String>) {
-        val messages = conversations.get(peerPubkey) ?: return
+    private fun mergeRelayUrlsLocked(convKey: String, messageId: String, newUrls: Set<String>) {
+        val messages = conversations.get(convKey) ?: return
         val idx = messages.indexOfFirst { it.id == messageId }
         if (idx >= 0) {
             val existing = messages[idx]
             messages[idx] = existing.copy(relayUrls = existing.relayUrls + newUrls)
         }
+    }
+
+    /**
+     * Pre-create an empty conversation entry (for group DMs initiated locally before
+     * any message has been sent/received).
+     */
+    fun initConversation(convKey: String, participants: List<String>) {
+        synchronized(lock) {
+            conversations.getOrPut(convKey) { mutableListOf() }
+            conversationParticipants[convKey] = participants
+        }
+        updateConversationList()
     }
 
     /** Pre-register a gift wrap ID as seen so it gets deduped when received from relays. */
@@ -144,9 +262,9 @@ class DmRepository(context: Context? = null, pubkeyHex: String? = null) {
         }
     }
 
-    fun getConversation(peerPubkey: String): List<DmMessage> {
+    fun getConversation(convKey: String): List<DmMessage> {
         return synchronized(lock) {
-            conversations.get(peerPubkey)?.toList() ?: emptyList()
+            conversations.get(convKey)?.toList() ?: emptyList()
         }
     }
 
@@ -187,7 +305,12 @@ class DmRepository(context: Context? = null, pubkeyHex: String? = null) {
 
     fun purgeUser(pubkey: String) {
         synchronized(lock) {
-            conversations.remove(pubkey)
+            // Remove all conversations that include this pubkey
+            val keysToRemove = conversations.keys.filter { key -> key.split(",").contains(pubkey) }
+            keysToRemove.forEach {
+                conversations.remove(it)
+                conversationParticipants.remove(it)
+            }
             conversationKeyCache.remove(pubkey)
         }
         updateConversationList()
@@ -220,15 +343,22 @@ class DmRepository(context: Context? = null, pubkeyHex: String? = null) {
         }
     }
 
-    fun reload(pubkeyHex: String?) {
+    /** Call when switching accounts — clears all state and re-keys to the new pubkey. */
+    fun reload(pubkeyHex: String) {
+        clear()
+        myPubkey = pubkeyHex
+        prefs = context?.getSharedPreferences("wisp_dm_$pubkeyHex", Context.MODE_PRIVATE)
         lastReadDmTimestamp = prefs?.getLong("last_read_dm", 0L) ?: 0L
+        latestGiftWrapTs = prefs?.getLong("latest_gwrap_ts", 0L) ?: 0L
     }
 
     fun clear() {
         synchronized(lock) {
             conversations.clear()
+            conversationParticipants.clear()
             conversationKeyCache.evictAll()
             seenGiftWraps.clear()
+            rumorIdIndex.clear()
             dmRelayCache.evictAll()
             dmNotifItems.clear()
             dmNotifIds.clear()
@@ -249,9 +379,13 @@ class DmRepository(context: Context? = null, pubkeyHex: String? = null) {
 
     private fun updateConversationList() {
         val list = synchronized(lock) {
-            conversations.map { (peer, messages) ->
+            conversations.map { (convKey, messages) ->
+                val participants = conversationParticipants[convKey]
+                    ?: messages.firstOrNull()?.participants
+                    ?: emptyList()
                 DmConversation(
-                    peerPubkey = peer,
+                    conversationKey = convKey,
+                    participants = participants,
                     messages = messages.toList(),
                     lastMessageAt = messages.maxOfOrNull { it.createdAt } ?: 0
                 )

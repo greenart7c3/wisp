@@ -145,6 +145,7 @@ fun SplashScreen(
 
             Button(
                 onClick = onSignUp,
+                enabled = torStatus != TorStatus.STARTING,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Create Account")
@@ -154,6 +155,7 @@ fun SplashScreen(
 
             OutlinedButton(
                 onClick = onLogIn,
+                enabled = torStatus != TorStatus.STARTING,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Log In")

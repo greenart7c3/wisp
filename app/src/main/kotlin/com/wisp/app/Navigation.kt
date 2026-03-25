@@ -56,6 +56,7 @@ import com.wisp.app.ui.screen.BlossomServersScreen
 import com.wisp.app.ui.screen.AuthScreen
 import com.wisp.app.ui.screen.SplashScreen
 import com.wisp.app.ui.screen.ComposeScreen
+import com.wisp.app.ui.screen.ContactPickerScreen
 import com.wisp.app.ui.screen.DmConversationScreen
 import com.wisp.app.ui.screen.DmListScreen
 import com.wisp.app.ui.screen.DraftsScreen
@@ -123,6 +124,8 @@ object Routes {
     const val THREAD = "thread/{eventId}"
     const val DM_LIST = "dms"
     const val DM_CONVERSATION = "dm/{pubkey}"
+    const val DM_CONVERSATION_GROUP = "dm/group/{conversationKey}"
+    const val CONTACT_PICKER = "contact_picker"
     const val NOTIFICATIONS = "notifications"
     const val BLOSSOM_SERVERS = "blossom_servers"
     const val WALLET = "wallet"
@@ -269,7 +272,7 @@ fun WispNavHost(
         authViewModel.isAddingAccount = true
         feedViewModel.resetForAccountSwitch()
         walletViewModel.suspendForAccountSwitch()  // disconnect only, preserve credentials
-        navController.navigate(Routes.AUTH) {
+        navController.navigate(Routes.SPLASH) {
             popUpTo(0) { inclusive = true }
         }
     }
@@ -406,7 +409,7 @@ fun WispNavHost(
     val currentRoute = navBackStackEntry?.destination?.route
 
     val nonAppRoutes = setOf(Routes.SPLASH, Routes.AUTH, Routes.LOADING, Routes.ONBOARDING_PROFILE, Routes.ONBOARDING_SUGGESTIONS, Routes.EXISTING_USER_ONBOARDING)
-    val hideBottomBarRoutes = nonAppRoutes + Routes.DM_CONVERSATION
+    val hideBottomBarRoutes = nonAppRoutes + Routes.DM_CONVERSATION + Routes.DM_CONVERSATION_GROUP + Routes.CONTACT_PICKER
     val socialGraphDiscoveryState by feedViewModel.extendedNetworkRepo.discoveryState.collectAsState()
     val socialGraphComputing = currentRoute == Routes.SOCIAL_GRAPH && (
         socialGraphDiscoveryState is com.wisp.app.repo.DiscoveryState.FetchingFollowLists ||
@@ -793,7 +796,7 @@ fun WispNavHost(
                             popUpTo(0) { inclusive = true }
                         }
                     } else {
-                        navController.navigate(Routes.AUTH) {
+                        navController.navigate(Routes.SPLASH) {
                             popUpTo(0) { inclusive = true }
                         }
                     }
@@ -1154,18 +1157,41 @@ fun WispNavHost(
                 activeSigner?.let { dmListViewModel.decryptPending(it) }
                 dmListViewModel.markDmsRead()
                 // Fetch profile metadata for all DM peers
-                val peerPubkeys = dmListViewModel.conversationList.value.map { it.peerPubkey }
-                for (pubkey in peerPubkeys) {
+                val allParticipants = dmListViewModel.conversationList.value.flatMap { it.participants }
+                for (pubkey in allParticipants) {
                     feedViewModel.metadataFetcher.queueProfileFetch(pubkey)
                 }
             }
             DmListScreen(
                 viewModel = dmListViewModel,
                 eventRepo = feedViewModel.eventRepo,
+                userPubkey = feedViewModel.getUserPubkey(),
                 onBack = null,
-                onConversation = { pubkey ->
-                    navController.navigate("dm/$pubkey")
+                onConversation = { convo ->
+                    if (convo.isGroup) {
+                        navController.navigate("dm/group/${convo.conversationKey.replace(",", "~")}")
+                    } else {
+                        navController.navigate("dm/${convo.peerPubkey}")
+                    }
+                },
+                onNewGroupDm = {
+                    navController.navigate(Routes.CONTACT_PICKER)
                 }
+            )
+        }
+
+        composable(Routes.CONTACT_PICKER) {
+            val userPubkey = feedViewModel.getUserPubkey() ?: return@composable
+            ContactPickerScreen(
+                viewModel = dmListViewModel,
+                eventRepo = feedViewModel.eventRepo,
+                contactRepo = feedViewModel.contactRepo,
+                onBack = { navController.popBackStack() },
+                onConfirm = { conversationKey ->
+                    navController.popBackStack()
+                    navController.navigate("dm/group/${conversationKey.replace(",", "~")}")
+                },
+                myPubkey = userPubkey
             )
         }
 
@@ -1175,13 +1201,20 @@ fun WispNavHost(
         ) { backStackEntry ->
             val pubkey = backStackEntry.arguments?.getString("pubkey") ?: return@composable
             val dmConvoViewModel: DmConversationViewModel = viewModel()
+            val userPubkey = feedViewModel.getUserPubkey()
             LaunchedEffect(pubkey) {
                 feedViewModel.refreshDmsAndNotifications()
-                dmConvoViewModel.init(pubkey, feedViewModel.dmRepo, feedViewModel.relayListRepo, feedViewModel.relayPool, feedViewModel.powPrefs)
+                dmConvoViewModel.init(
+                    peerPubkeyHex = pubkey,
+                    dmRepository = feedViewModel.dmRepo,
+                    relayListRepository = feedViewModel.relayListRepo,
+                    relayPool = feedViewModel.relayPool,
+                    powPreferences = feedViewModel.powPrefs,
+                    myPubkeyHex = userPubkey
+                )
                 activeSigner?.let { dmConvoViewModel.decryptPending(it, feedViewModel.muteRepo) }
             }
             val peerProfile = feedViewModel.eventRepo.getProfileData(pubkey)
-            val userPubkey = feedViewModel.getUserPubkey()
             val userProfile = userPubkey?.let { feedViewModel.eventRepo.getProfileData(it) }
             DmConversationScreen(
                 viewModel = dmConvoViewModel,
@@ -1195,7 +1228,57 @@ fun WispNavHost(
                 onProfileClick = { pk -> navController.navigate("profile/$pk") },
                 onNoteClick = { eventId -> navController.navigate("thread/$eventId") },
                 peerPubkey = pubkey,
-                signer = activeSigner
+                signer = activeSigner,
+                socialActionManager = feedViewModel.socialActions,
+                isWalletConnected = feedViewModel.activeWalletProvider.hasConnection(),
+                onGoToWallet = { navController.navigate(Routes.WALLET) }
+            )
+        }
+
+        composable(
+            Routes.DM_CONVERSATION_GROUP,
+            arguments = listOf(navArgument("conversationKey") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val encodedKey = backStackEntry.arguments?.getString("conversationKey") ?: return@composable
+            val convKey = encodedKey.replace("~", ",")
+            val participantList = convKey.split(",").filter { it != feedViewModel.getUserPubkey() }
+            val dmConvoViewModel: DmConversationViewModel = viewModel()
+            val userPubkey = feedViewModel.getUserPubkey()
+            LaunchedEffect(convKey) {
+                feedViewModel.refreshDmsAndNotifications()
+                dmConvoViewModel.init(
+                    peerPubkeyHex = participantList.firstOrNull() ?: "",
+                    dmRepository = feedViewModel.dmRepo,
+                    relayListRepository = feedViewModel.relayListRepo,
+                    relayPool = feedViewModel.relayPool,
+                    powPreferences = feedViewModel.powPrefs,
+                    myPubkeyHex = userPubkey,
+                    participantPubkeys = participantList
+                )
+                activeSigner?.let { dmConvoViewModel.decryptPending(it, feedViewModel.muteRepo) }
+                for (pubkey in participantList) {
+                    feedViewModel.metadataFetcher.queueProfileFetch(pubkey)
+                }
+            }
+            val peerProfile = participantList.firstOrNull()?.let { feedViewModel.eventRepo.getProfileData(it) }
+            val userProfile = userPubkey?.let { feedViewModel.eventRepo.getProfileData(it) }
+            DmConversationScreen(
+                viewModel = dmConvoViewModel,
+                relayPool = feedViewModel.relayPool,
+                peerProfile = peerProfile,
+                userProfile = userProfile,
+                userPubkey = userPubkey,
+                eventRepo = feedViewModel.eventRepo,
+                relayInfoRepo = feedViewModel.relayInfoRepo,
+                onBack = { navController.popBackStack() },
+                onProfileClick = { pk -> navController.navigate("profile/$pk") },
+                onNoteClick = { eventId -> navController.navigate("thread/$eventId") },
+                peerPubkey = participantList.firstOrNull() ?: "",
+                participants = participantList,
+                signer = activeSigner,
+                socialActionManager = feedViewModel.socialActions,
+                isWalletConnected = feedViewModel.activeWalletProvider.hasConnection(),
+                onGoToWallet = { navController.navigate(Routes.WALLET) }
             )
         }
 
@@ -2018,19 +2101,23 @@ fun WispNavHost(
                 totalSelected = selectedPubkeys.size,
                 onContinue = {
                     scope.launch {
+                        feedViewModel.setFeedType(FeedType.FOLLOWS)
+                        feedViewModel.reloadForNewAccount()
+                        relayViewModel.reload()
+                        blossomServersViewModel.reload()
+                        composeViewModel.reloadBlossomRepo()
+                        walletViewModel.refreshState()
+                        // finishOnboarding must run after reloadForNewAccount so contactRepo
+                        // is already switched to the new pubkey-specific prefs file.
+                        // Otherwise the follow list is saved to the null-keyed prefs and
+                        // wiped when reloadForNewAccount reloads to the correct prefs.
                         onboardingViewModel.finishOnboarding(
                             relayPool = feedViewModel.relayPool,
                             contactRepo = feedViewModel.contactRepo,
                             selectedPubkeys = selectedPubkeys,
                             signer = activeSigner
                         )
-                        feedViewModel.setFeedType(FeedType.EXTENDED_FOLLOWS)
-                        feedViewModel.reloadForNewAccount()
-                        relayViewModel.reload()
-                        blossomServersViewModel.reload()
-                        composeViewModel.reloadBlossomRepo()
                         feedViewModel.initRelays()
-                        walletViewModel.refreshState()
                         navController.navigate(Routes.LOADING) {
                             popUpTo(0) { inclusive = true }
                         }
@@ -2211,6 +2298,13 @@ fun WispNavHost(
                 },
                 onSendDm = { peerPubkey, content ->
                     notificationsViewModel.sendDm(peerPubkey, content, activeSigner)
+                },
+                onDmConversationClick = { conversationKey ->
+                    if (conversationKey.contains(",")) {
+                        navController.navigate("dm/group/${conversationKey.replace(",", "~")}")
+                    } else {
+                        navController.navigate("dm/$conversationKey")
+                    }
                 }
             )
 

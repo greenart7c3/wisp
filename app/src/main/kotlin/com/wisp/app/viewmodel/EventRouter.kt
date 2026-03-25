@@ -3,6 +3,8 @@ package com.wisp.app.viewmodel
 import android.util.Log
 import com.wisp.app.nostr.Blossom
 import com.wisp.app.nostr.DmMessage
+import com.wisp.app.nostr.DmReaction
+import com.wisp.app.nostr.DmZap
 import com.wisp.app.nostr.Nip10
 import com.wisp.app.nostr.Nip17
 import com.wisp.app.nostr.Nip30
@@ -114,6 +116,19 @@ class EventRouter(
                     9735 -> {
                         eventRepo.addEvent(event)
                         eventRepo.addEventRelay(event.id, relayUrl)
+                        // Associate with a DM message if the e-tag points to a known rumorId
+                        val eTagId = event.tags.firstOrNull { it.size >= 2 && it[0] == "e" }?.get(1)
+                        if (eTagId != null) {
+                            val (convKey, msgId) = dmRepo.findByRumorId(eTagId)
+                                ?.let { it.first to it.second } ?: (null to null)
+                            if (convKey != null && msgId != null) {
+                                val sats = Nip57.getZapAmountSats(event)
+                                if (sats > 0) {
+                                    val zapperPubkey = Nip57.getZapperPubkey(event) ?: event.pubkey
+                                    dmRepo.addZap(convKey, msgId, DmZap(zapperPubkey, sats, event.created_at))
+                                }
+                            }
+                        }
                     }
                     1 -> {
                         eventRepo.cacheEvent(event)
@@ -188,6 +203,18 @@ class EventRouter(
                 val zapperPubkey = Nip57.getZapperPubkey(event)
                 if (zapperPubkey != null && eventRepo.getProfileData(zapperPubkey) == null) {
                     metadataFetcher.addToPendingProfiles(zapperPubkey)
+                }
+                // Associate with a DM message if the e-tag points to a known rumorId
+                val eTagId = event.tags.firstOrNull { it.size >= 2 && it[0] == "e" }?.get(1)
+                if (eTagId != null) {
+                    val found = dmRepo.findByRumorId(eTagId)
+                    if (found != null) {
+                        val sats = Nip57.getZapAmountSats(event)
+                        if (sats > 0) {
+                            val zapper = zapperPubkey ?: event.pubkey
+                            dmRepo.addZap(found.first, found.second, DmZap(zapper, sats, event.created_at))
+                        }
+                    }
                 }
             }
         } else if (subscriptionId == "thread-root" || subscriptionId == "thread-replies" ||
@@ -463,22 +490,35 @@ class EventRouter(
             null
         } ?: return
 
-        val peerPubkey = if (rumor.pubkey == myPubkey) {
-            rumor.tags.firstOrNull { it.size >= 2 && it[0] == "p" }?.get(1) ?: return
-        } else {
-            rumor.pubkey
+        // Private DM reaction — associate with the target message, not a new conversation entry
+        if (Nip17.isReaction(rumor)) {
+            val targetId = rumor.tags.firstOrNull { it.size >= 2 && it[0] == "e" }?.get(1) ?: return
+            val participants = Nip17.getConversationParticipants(rumor, myPubkey)
+            if (participants.any { muteRepo.isBlocked(it) }) return
+            val convKey = DmRepository.conversationKey(participants + myPubkey)
+            dmRepo.addReaction(convKey, targetId, DmReaction(rumor.pubkey, rumor.content.trim(), rumor.createdAt))
+            return
         }
 
-        if (muteRepo.isBlocked(peerPubkey)) return
+        val participants = Nip17.getConversationParticipants(rumor, myPubkey)
+        if (participants.any { muteRepo.isBlocked(it) }) return
 
+        val convKey = DmRepository.conversationKey(participants + myPubkey)
+        val replyToId = rumor.tags.firstOrNull { it.size >= 2 && it[0] == "e" && it.any { v -> v == "reply" } }?.get(1)
+        val rumorId = Nip17.computeRumorId(rumor)
         val msg = DmMessage(
             id = "${event.id}:${rumor.createdAt}",
             senderPubkey = rumor.pubkey,
             content = rumor.content,
             createdAt = rumor.createdAt,
             giftWrapId = event.id,
-            relayUrls = if (relayUrl.isNotEmpty()) setOf(relayUrl) else emptySet()
+            relayUrls = if (relayUrl.isNotEmpty()) setOf(relayUrl) else emptySet(),
+            rumorId = rumorId,
+            replyToId = replyToId,
+            participants = participants,
+            debugGiftWrapJson = event.toJson(),
+            debugRumorJson = Nip17.rumorToJson(rumor)
         )
-        dmRepo.addMessage(msg, peerPubkey)
+        dmRepo.addMessage(msg, convKey)
     }
 }

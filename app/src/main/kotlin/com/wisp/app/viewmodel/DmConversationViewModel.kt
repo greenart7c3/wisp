@@ -9,6 +9,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.wisp.app.nostr.ClientMessage
 import com.wisp.app.nostr.DmMessage
+import com.wisp.app.nostr.DmReaction
 import com.wisp.app.nostr.Filter
 import com.wisp.app.nostr.Nip13
 import com.wisp.app.nostr.Nip17
@@ -19,15 +20,18 @@ import com.wisp.app.repo.MuteRepository
 import com.wisp.app.nostr.hexToByteArray
 import com.wisp.app.nostr.toHex
 import com.wisp.app.relay.RelayConfig
+import com.wisp.app.relay.RelayEvent
 import com.wisp.app.relay.RelayPool
-import com.wisp.app.repo.BlossomRepository
 import com.wisp.app.repo.DmRepository
+import com.wisp.app.repo.BlossomRepository
 import com.wisp.app.repo.KeyRepository
 import com.wisp.app.repo.PowPreferences
 import com.wisp.app.repo.RelayListRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -62,6 +66,10 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
     private val _peerDeliveryRelays = MutableStateFlow(PeerDeliveryRelays())
     val peerDeliveryRelays: StateFlow<PeerDeliveryRelays> = _peerDeliveryRelays
 
+    /** Relay info for every participant (pubkey → relays), used by the relay panel in group DMs. */
+    private val _allParticipantRelays = MutableStateFlow<Map<String, PeerDeliveryRelays>>(emptyMap())
+    val allParticipantRelays: StateFlow<Map<String, PeerDeliveryRelays>> = _allParticipantRelays
+
     private val _userDmRelays = MutableStateFlow<List<String>>(emptyList())
     val userDmRelays: StateFlow<List<String>> = _userDmRelays
 
@@ -74,44 +82,102 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
     private val _miningStatus = MutableStateFlow<PowStatus>(PowStatus.Idle)
     val miningStatus: StateFlow<PowStatus> = _miningStatus
 
+    private val _replyingToMessage = MutableStateFlow<DmMessage?>(null)
+    val replyingToMessage: StateFlow<DmMessage?> = _replyingToMessage
+
+    private val _selectedMessageId = MutableStateFlow<String?>(null)
+    val selectedMessageId: StateFlow<String?> = _selectedMessageId
+
     private var peerPubkey: String = ""
+    private var conversationKey: String = ""
+    /** All participants in this conversation, excluding the local user. */
+    private var participants: List<String> = emptyList()
+    val isGroup: Boolean get() = participants.size > 1
+
     private var dmRepo: DmRepository? = null
     private var relayListRepo: RelayListRepository? = null
     private var powPrefs: PowPreferences? = null
 
-    fun init(peerPubkeyHex: String, dmRepository: DmRepository, relayListRepository: RelayListRepository? = null, relayPool: RelayPool? = null, powPreferences: PowPreferences? = null) {
+    fun setReplyingTo(message: DmMessage?) {
+        _replyingToMessage.value = message
+        if (message != null) _selectedMessageId.value = null
+    }
+
+    fun clearReply() {
+        _replyingToMessage.value = null
+    }
+
+    fun selectMessage(id: String?) {
+        _selectedMessageId.value = if (_selectedMessageId.value == id) null else id
+    }
+
+    fun init(
+        peerPubkeyHex: String,
+        dmRepository: DmRepository,
+        relayListRepository: RelayListRepository? = null,
+        relayPool: RelayPool? = null,
+        powPreferences: PowPreferences? = null,
+        myPubkeyHex: String? = null,
+        participantPubkeys: List<String> = emptyList()
+    ) {
         peerPubkey = peerPubkeyHex
+        participants = participantPubkeys.ifEmpty { listOf(peerPubkeyHex) }
+        val myKey = myPubkeyHex ?: keyRepo.getPubkeyHex() ?: ""
+        conversationKey = DmRepository.conversationKey(participants + myKey)
+
         dmRepo = dmRepository
         relayListRepo = relayListRepository
         powPrefs = powPreferences
-        _messages.value = dmRepository.getConversation(peerPubkeyHex)
+        _messages.value = dmRepository.getConversation(conversationKey)
 
         // Expose user's own DM relays
         if (relayPool != null) {
             _userDmRelays.value = relayPool.getDmRelayUrls()
         }
 
-        // Fetch peer's DM relays and resolve delivery relays with fallback chain
+        // Fetch DM relays for all participants; populate allParticipantRelays for the relay panel
         if (relayPool != null) {
             viewModelScope.launch {
+                val map = mutableMapOf<String, PeerDeliveryRelays>()
+
+                // Seed from cache for all participants
+                for (p in participants) {
+                    val cached = dmRepository.getCachedDmRelays(p)
+                    if (!cached.isNullOrEmpty()) {
+                        map[p] = PeerDeliveryRelays(cached, DeliveryRelaySource.DM_RELAYS)
+                    }
+                }
+                if (map.isNotEmpty()) _allParticipantRelays.value = map.toMap()
+
+                // Fetch fresh for primary peer
                 val cached = dmRepository.getCachedDmRelays(peerPubkeyHex)
                 if (cached != null) {
                     _peerDeliveryRelays.value = PeerDeliveryRelays(cached, DeliveryRelaySource.DM_RELAYS)
                 }
-                // Always fetch fresh relays from indexers to ensure we have the latest
                 val fetched = fetchRecipientDmRelays(relayPool, forceRefresh = true)
-                if (fetched.isNotEmpty()) {
-                    _peerDeliveryRelays.value = PeerDeliveryRelays(fetched, DeliveryRelaySource.DM_RELAYS)
-                } else if (cached.isNullOrEmpty()) {
-                    // No DM relays found — resolve fallback chain
-                    _peerDeliveryRelays.value = resolveRecipientRelaysWithSource(emptyList(), relayPool)
+                val primaryRelays = when {
+                    fetched.isNotEmpty() -> PeerDeliveryRelays(fetched, DeliveryRelaySource.DM_RELAYS)
+                    cached.isNullOrEmpty() -> resolveRecipientRelaysWithSource(emptyList(), relayPool)
+                    else -> _peerDeliveryRelays.value
                 }
+                _peerDeliveryRelays.value = primaryRelays
+                map[peerPubkeyHex] = primaryRelays
+                _allParticipantRelays.value = map.toMap()
+
+                // Fetch fresh for additional participants (group DMs)
+                for (p in participants.filter { it != peerPubkeyHex }) {
+                    val relays = fetchRelaysForParticipant(p, relayPool)
+                    if (relays.isNotEmpty()) {
+                        map[p] = PeerDeliveryRelays(relays, DeliveryRelaySource.DM_RELAYS)
+                    }
+                }
+                if (participants.size > 1) _allParticipantRelays.value = map.toMap()
             }
         }
 
         viewModelScope.launch {
             dmRepository.conversationList.collect {
-                _messages.value = dmRepository.getConversation(peerPubkey)
+                _messages.value = dmRepository.getConversation(conversationKey)
             }
         }
 
@@ -122,6 +188,30 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             dmRepository.pendingDecryptCount.collect { _pendingDecryptCount.value = it }
         }
+
+        // Fetch historical zap receipts for messages already in this conversation
+        if (relayPool != null) {
+            viewModelScope.launch {
+                fetchDmZapReceipts(relayPool)
+            }
+        }
+    }
+
+    /**
+     * Query relays for 9735 zap receipts targeting any known rumorId in this conversation.
+     * Runs once on open to restore badges from previous sessions.
+     */
+    private suspend fun fetchDmZapReceipts(relayPool: RelayPool) {
+        val rumorIds = _messages.value.mapNotNull { it.rumorId.ifEmpty { null } }
+        if (rumorIds.isEmpty()) return
+        val subId = "zap-rcpt-dm-${conversationKey.take(16)}"
+        val filter = Filter(kinds = listOf(9735), eTags = rumorIds)
+        val msg = ClientMessage.req(subId, filter)
+        relayPool.sendToReadRelays(msg)
+        if (relayPool.hasDmRelays()) relayPool.sendToDmRelays(msg)
+        // Close after a short window — results arrive via EventRouter's zap-rcpt-* handler
+        delay(8000)
+        relayPool.closeOnAllRelays(subId)
     }
 
     /**
@@ -142,23 +232,36 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
                     val wrap = repo.takeNextPendingGiftWrap() ?: break
                     try {
                         val rumor = Nip17.unwrapGiftWrapRemote(signer, wrap.event) ?: continue
-                        val peerPubkey = if (rumor.pubkey == myPubkey) {
-                            rumor.tags.firstOrNull { it.size >= 2 && it[0] == "p" }?.get(1) ?: continue
-                        } else {
-                            rumor.pubkey
+
+                        if (Nip17.isReaction(rumor)) {
+                            val targetId = rumor.tags.firstOrNull { it.size >= 2 && it[0] == "e" }?.get(1)
+                                ?: continue
+                            val pList = Nip17.getConversationParticipants(rumor, myPubkey)
+                            val convKey = DmRepository.conversationKey(pList + myPubkey)
+                            repo.addReaction(convKey, targetId, DmReaction(rumor.pubkey, rumor.content.trim(), rumor.createdAt))
+                            continue
                         }
 
-                        if (muteRepo?.isBlocked(peerPubkey) == true) continue
+                        val pList = Nip17.getConversationParticipants(rumor, myPubkey)
+                        if (pList.any { muteRepo?.isBlocked(it) == true }) continue
 
+                        val convKey = DmRepository.conversationKey(pList + myPubkey)
+                        val replyToId = rumor.tags.firstOrNull { it.size >= 2 && it[0] == "e" && it.any { v -> v == "reply" } }?.get(1)
+                        val rumorId = Nip17.computeRumorId(rumor)
                         val msg = DmMessage(
                             id = "${wrap.event.id}:${rumor.createdAt}",
                             senderPubkey = rumor.pubkey,
                             content = rumor.content,
                             createdAt = rumor.createdAt,
                             giftWrapId = wrap.event.id,
-                            relayUrls = if (wrap.relayUrl.isNotEmpty()) setOf(wrap.relayUrl) else emptySet()
+                            relayUrls = if (wrap.relayUrl.isNotEmpty()) setOf(wrap.relayUrl) else emptySet(),
+                            rumorId = rumorId,
+                            replyToId = replyToId,
+                            participants = pList,
+                            debugGiftWrapJson = wrap.event.toJson(),
+                            debugRumorJson = Nip17.rumorToJson(rumor)
                         )
-                        repo.addMessage(msg, peerPubkey)
+                        repo.addMessage(msg, convKey)
                     } catch (_: Exception) {
                         // Individual wrap failed, continue with the rest
                     }
@@ -226,9 +329,12 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
         // Also broadcast to connected relays for additional coverage
         relayPool.sendToAll(reqMsg)
 
-        // Wait up to 4s for a matching event
-        val result = withTimeoutOrNull(4000L) {
-            relayPool.relayEvents.first { it.subscriptionId == subId }
+        // Collect all responses within 4s; pick the freshest (highest created_at)
+        val results = mutableListOf<RelayEvent>()
+        withTimeoutOrNull(4000L) {
+            relayPool.relayEvents
+                .filter { it.subscriptionId == subId }
+                .collect { results.add(it) }
         }
 
         // Close subscription
@@ -238,8 +344,9 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
         }
         relayPool.sendToAll(closeMsg)
 
-        if (result != null) {
-            val urls = Nip51.parseRelaySet(result.event)
+        val best = results.maxByOrNull { it.event.created_at }
+        if (best != null) {
+            val urls = Nip51.parseRelaySet(best.event)
             if (urls.isNotEmpty()) {
                 repo.cacheDmRelays(peerPubkey, urls)
                 return urls
@@ -264,10 +371,8 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
         if (recipientDmRelays.isNotEmpty())
             return PeerDeliveryRelays(recipientDmRelays, DeliveryRelaySource.DM_RELAYS)
 
-        // Ensure we have the peer's kind 10002 relay list
-        if (relayListRepo?.hasRelayList(peerPubkey) != true) {
-            fetchPeerRelayList(relayPool)
-        }
+        // Always fetch the freshest kind 10002 relay list — cached version may be stale
+        fetchPeerRelayList(peerPubkey, relayPool)
 
         val readRelays = relayListRepo?.getReadRelays(peerPubkey)
         if (!readRelays.isNullOrEmpty())
@@ -281,15 +386,15 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Fetch peer's kind 10002 relay list from indexer relays if not already cached.
+     * Fetch a pubkey's kind 10002 relay list from indexer relays.
      */
-    private suspend fun fetchPeerRelayList(relayPool: RelayPool) {
+    private suspend fun fetchPeerRelayList(pubkeyHex: String, relayPool: RelayPool) {
         val repo = relayListRepo ?: return
 
-        val subId = "rl_${peerPubkey.take(8)}"
+        val subId = "rl_${pubkeyHex.take(8)}"
         val filter = Filter(
             kinds = listOf(10002),
-            authors = listOf(peerPubkey),
+            authors = listOf(pubkeyHex),
             limit = 1
         )
         val reqMsg = ClientMessage.req(subId, filter)
@@ -298,8 +403,12 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
         }
         relayPool.sendToAll(reqMsg)
 
-        val result = withTimeoutOrNull(4000L) {
-            relayPool.relayEvents.first { it.subscriptionId == subId }
+        // Collect all responses within 4s; pick the freshest (highest created_at)
+        val results = mutableListOf<RelayEvent>()
+        withTimeoutOrNull(4000L) {
+            relayPool.relayEvents
+                .filter { it.subscriptionId == subId }
+                .collect { results.add(it) }
         }
 
         val closeMsg = ClientMessage.close(subId)
@@ -308,14 +417,38 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
         }
         relayPool.sendToAll(closeMsg)
 
-        if (result != null) {
-            repo.updateFromEvent(result.event)
+        val best = results.maxByOrNull { it.event.created_at }
+        if (best != null) {
+            repo.updateFromEvent(best.event)
         }
+    }
+
+    /**
+     * Full fallback relay resolution for any group participant.
+     * Used when kind 10050 fetch returns nothing: tries kind 10002 read → write → own write relays.
+     */
+    private suspend fun resolveRelaysForParticipant(pubkeyHex: String, relayPool: RelayPool): List<String> {
+        fetchPeerRelayList(pubkeyHex, relayPool)
+        val readRelays = relayListRepo?.getReadRelays(pubkeyHex)
+        if (!readRelays.isNullOrEmpty()) return readRelays
+        val writeRelays = relayListRepo?.getWriteRelays(pubkeyHex)
+        if (!writeRelays.isNullOrEmpty()) return writeRelays
+        return relayPool.getWriteRelayUrls()
     }
 
     fun sendMessage(relayPool: RelayPool, signer: NostrSigner? = null) {
         val text = _messageText.value.trim()
         if (text.isBlank() || _sending.value) return
+        val replyingTo = _replyingToMessage.value
+
+        val replyTags: List<List<String>> = if (replyingTo?.rumorId?.isNotEmpty() == true) {
+            listOf(listOf("e", replyingTo.rumorId, "", "reply"))
+        } else emptyList()
+
+        // Build the full p-tag list for the rumor (all participants)
+        val allParticipantTags: List<List<String>> = if (isGroup) {
+            participants.drop(1).map { listOf("p", it) } // extra p-tags beyond the first
+        } else emptyList()
 
         // Remote signer mode: use signer, no keypair needed
         if (signer != null) {
@@ -333,19 +466,48 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
                         _miningStatus.value = PowStatus.Mining(1059, 0, dmDifficulty)
                     }
 
-                    val recipientWrap = Nip17.createGiftWrapRemote(
-                        signer = signer,
-                        recipientPubkeyHex = peerPubkey,
-                        message = text,
-                        targetDifficulty = dmDifficulty,
-                        onProgress = { attempts ->
-                            _miningStatus.value = PowStatus.Mining(1059, attempts, dmDifficulty)
-                        }
-                    )
-                    val recipientMsg = ClientMessage.event(recipientWrap)
-                    val sentRelayUrls = sendToDeliveryRelays(relayPool, deliveryRelays, recipientMsg)
+                    val combinedTags = replyTags + allParticipantTags
 
-                    if (sentRelayUrls.isEmpty()) {
+                    // Fix rumorId consistency: compute timestamp before any wraps so all recipients
+                    // decrypt the same rumor (identical tags + created_at → identical rumorId).
+                    val rumorCreatedAt = System.currentTimeMillis() / 1000
+                    val rumor = Nip17.buildRumor(
+                        senderPubkeyHex = signer.pubkeyHex,
+                        message = text,
+                        pTag = peerPubkey,
+                        replyTags = combinedTags,
+                        createdAt = rumorCreatedAt
+                    )
+                    val rumorId = Nip17.computeRumorId(rumor)
+
+                    var firstSentRelayUrls = emptySet<String>()
+
+                    // Send a separate gift wrap to each participant.
+                    // rumorPTag = peerPubkey so all wraps encode the same rumor (same ID).
+                    for (recipient in participants) {
+                        val wrap = Nip17.createGiftWrapRemote(
+                            signer = signer,
+                            recipientPubkeyHex = recipient,
+                            message = text,
+                            replyTags = combinedTags,
+                            rumorPTag = peerPubkey,
+                            targetDifficulty = if (recipient == peerPubkey) dmDifficulty else 0,
+                            onProgress = if (recipient == peerPubkey) { attempts ->
+                                _miningStatus.value = PowStatus.Mining(1059, attempts, dmDifficulty)
+                            } else null,
+                            createdAt = rumorCreatedAt
+                        )
+                        val recipientRelays = if (recipient == peerPubkey) {
+                            deliveryRelays
+                        } else {
+                            val dmRelays = fetchRelaysForParticipant(recipient, relayPool)
+                            dmRelays.ifEmpty { resolveRelaysForParticipant(recipient, relayPool) }
+                        }
+                        val sent = sendToDeliveryRelays(relayPool, recipientRelays, ClientMessage.event(wrap))
+                        if (recipient == peerPubkey) firstSentRelayUrls = sent
+                    }
+
+                    if (firstSentRelayUrls.isEmpty() && participants.size == 1) {
                         _messageText.value = text
                         _sendError.value = "Failed to deliver — no relays accepted the message"
                     }
@@ -354,8 +516,10 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
                         signer = signer,
                         recipientPubkeyHex = signer.pubkeyHex,
                         message = text,
+                        replyTags = combinedTags,
                         rumorPTag = peerPubkey,
-                        targetDifficulty = dmDifficulty
+                        targetDifficulty = dmDifficulty,
+                        createdAt = rumorCreatedAt
                     )
                     val selfMsg = ClientMessage.event(selfWrap)
                     if (relayPool.hasDmRelays()) {
@@ -365,15 +529,19 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
                     }
 
                     val dmMsg = DmMessage(
-                        id = "${recipientWrap.id}:${System.currentTimeMillis() / 1000}",
+                        id = "${selfWrap.id}:$rumorCreatedAt",
                         senderPubkey = signer.pubkeyHex,
                         content = text,
-                        createdAt = System.currentTimeMillis() / 1000,
-                        giftWrapId = recipientWrap.id,
-                        relayUrls = sentRelayUrls
+                        createdAt = rumorCreatedAt,
+                        giftWrapId = selfWrap.id,
+                        relayUrls = firstSentRelayUrls,
+                        rumorId = rumorId,
+                        replyToId = replyingTo?.rumorId,
+                        participants = participants
                     )
-                    dmRepo?.addMessage(dmMsg, peerPubkey)
+                    dmRepo?.addMessage(dmMsg, conversationKey)
                     dmRepo?.markGiftWrapSeen(selfWrap.id, dmMsg.id)
+                    clearReply()
                 } catch (e: SignerCancelledException) {
                     _messageText.value = text
                     _sendError.value = "Signing cancelled"
@@ -399,6 +567,7 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.Default) {
             try {
                 val senderPubkeyHex = keypair.pubkey.toHex()
+                val combinedTags = replyTags + allParticipantTags
 
                 val recipientDmRelays = fetchRecipientDmRelays(relayPool)
                 val deliveryRelays = resolveRecipientRelaysWithSource(recipientDmRelays, relayPool).urls
@@ -409,20 +578,47 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
                     _miningStatus.value = PowStatus.Mining(1059, 0, dmDifficulty)
                 }
 
-                val recipientWrap = Nip17.createGiftWrap(
-                    senderPrivkey = keypair.privkey,
-                    senderPubkey = keypair.pubkey,
-                    recipientPubkey = peerPubkey.hexToByteArray(),
+                // Fix rumorId consistency: compute timestamp before any wraps so all recipients
+                // decrypt the same rumor (identical tags + created_at → identical rumorId).
+                val rumorCreatedAt = System.currentTimeMillis() / 1000
+                val rumor = Nip17.buildRumor(
+                    senderPubkeyHex = senderPubkeyHex,
                     message = text,
-                    targetDifficulty = dmDifficulty,
-                    onProgress = { attempts ->
-                        _miningStatus.value = PowStatus.Mining(1059, attempts, dmDifficulty)
-                    }
+                    pTag = peerPubkey,
+                    replyTags = combinedTags,
+                    createdAt = rumorCreatedAt
                 )
-                val recipientMsg = ClientMessage.event(recipientWrap)
-                val sentRelayUrls = sendToDeliveryRelays(relayPool, deliveryRelays, recipientMsg)
+                val rumorId = Nip17.computeRumorId(rumor)
 
-                if (sentRelayUrls.isEmpty()) {
+                var firstSentRelayUrls = emptySet<String>()
+
+                // Send a separate gift wrap to each participant.
+                // rumorPTag = peerPubkey so all wraps encode the same rumor (same ID).
+                for (recipient in participants) {
+                    val wrap = Nip17.createGiftWrap(
+                        senderPrivkey = keypair.privkey,
+                        senderPubkey = keypair.pubkey,
+                        recipientPubkey = recipient.hexToByteArray(),
+                        message = text,
+                        replyTags = combinedTags,
+                        rumorPTag = peerPubkey,
+                        targetDifficulty = if (recipient == peerPubkey) dmDifficulty else 0,
+                        onProgress = if (recipient == peerPubkey) { attempts ->
+                            _miningStatus.value = PowStatus.Mining(1059, attempts, dmDifficulty)
+                        } else null,
+                        createdAt = rumorCreatedAt
+                    )
+                    val recipientRelays = if (recipient == peerPubkey) {
+                        deliveryRelays
+                    } else {
+                        val dmRelays = fetchRelaysForParticipant(recipient, relayPool)
+                        dmRelays.ifEmpty { resolveRelaysForParticipant(recipient, relayPool) }
+                    }
+                    val sent = sendToDeliveryRelays(relayPool, recipientRelays, ClientMessage.event(wrap))
+                    if (recipient == peerPubkey) firstSentRelayUrls = sent
+                }
+
+                if (firstSentRelayUrls.isEmpty() && participants.size == 1) {
                     _messageText.value = text
                     _sendError.value = "Failed to deliver — no relays accepted the message"
                 }
@@ -432,8 +628,10 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
                     senderPubkey = keypair.pubkey,
                     recipientPubkey = keypair.pubkey,
                     message = text,
+                    replyTags = combinedTags,
                     rumorPTag = peerPubkey,
-                    targetDifficulty = dmDifficulty
+                    targetDifficulty = dmDifficulty,
+                    createdAt = rumorCreatedAt
                 )
                 val selfMsg = ClientMessage.event(selfWrap)
                 if (relayPool.hasDmRelays()) {
@@ -443,15 +641,19 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 val dmMsg = DmMessage(
-                    id = "${recipientWrap.id}:${System.currentTimeMillis() / 1000}",
+                    id = "${selfWrap.id}:$rumorCreatedAt",
                     senderPubkey = senderPubkeyHex,
                     content = text,
-                    createdAt = System.currentTimeMillis() / 1000,
-                    giftWrapId = recipientWrap.id,
-                    relayUrls = sentRelayUrls
+                    createdAt = rumorCreatedAt,
+                    giftWrapId = selfWrap.id,
+                    relayUrls = firstSentRelayUrls,
+                    rumorId = rumorId,
+                    replyToId = replyingTo?.rumorId,
+                    participants = participants
                 )
-                dmRepo?.addMessage(dmMsg, peerPubkey)
+                dmRepo?.addMessage(dmMsg, conversationKey)
                 dmRepo?.markGiftWrapSeen(selfWrap.id, dmMsg.id)
+                clearReply()
             } catch (e: Exception) {
                 _messageText.value = text
                 _sendError.value = "Failed to send message"
@@ -461,6 +663,85 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
                 _miningStatus.value = PowStatus.Idle
             }
         }
+    }
+
+    /**
+     * Send a private DM reaction (gift-wrapped kind 14) to all conversation participants.
+     */
+    fun sendReaction(targetRumorId: String, emoji: String, relayPool: RelayPool, signer: NostrSigner? = null) {
+        val originalSenderPubkey = _messages.value.firstOrNull { it.rumorId == targetRumorId }?.senderPubkey
+            ?: return
+
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                if (signer != null) {
+                    for (recipient in participants) {
+                        val wrap = Nip17.createDmReactionRemote(signer, recipient, targetRumorId, originalSenderPubkey, emoji)
+                        val relays = fetchRelaysForParticipant(recipient, relayPool)
+                            .ifEmpty { resolveRelaysForParticipant(recipient, relayPool) }
+                        sendToDeliveryRelays(relayPool, relays, ClientMessage.event(wrap))
+                    }
+                    // Self-copy
+                    val selfWrap = Nip17.createDmReactionRemote(signer, signer.pubkeyHex, targetRumorId, originalSenderPubkey, emoji)
+                    if (relayPool.hasDmRelays()) relayPool.sendToDmRelays(ClientMessage.event(selfWrap))
+                    else relayPool.sendToWriteRelays(ClientMessage.event(selfWrap))
+                } else {
+                    val keypair = keyRepo.getKeypair() ?: return@launch
+                    for (recipient in participants) {
+                        val wrap = Nip17.createDmReaction(keypair.privkey, keypair.pubkey, recipient.hexToByteArray(), targetRumorId, originalSenderPubkey, emoji)
+                        val relays = fetchRelaysForParticipant(recipient, relayPool)
+                            .ifEmpty { resolveRelaysForParticipant(recipient, relayPool) }
+                        sendToDeliveryRelays(relayPool, relays, ClientMessage.event(wrap))
+                    }
+                    // Self-copy
+                    val selfWrap = Nip17.createDmReaction(keypair.privkey, keypair.pubkey, keypair.pubkey, targetRumorId, originalSenderPubkey, emoji)
+                    if (relayPool.hasDmRelays()) relayPool.sendToDmRelays(ClientMessage.event(selfWrap))
+                    else relayPool.sendToWriteRelays(ClientMessage.event(selfWrap))
+                    // Optimistic local update
+                    val myPubkey = keypair.pubkey.toHex()
+                    dmRepo?.addReaction(conversationKey, targetRumorId, DmReaction(myPubkey, emoji, System.currentTimeMillis() / 1000))
+                }
+            } catch (e: Exception) {
+                Log.w("DmConversation", "sendReaction failed", e)
+            }
+        }
+    }
+
+    /**
+     * Fetch kind 10050 DM relays for any participant.
+     * Always goes to the network (no cache short-circuit) and broadcasts to all connected
+     * relays in addition to indexers, matching the aggressiveness of fetchRecipientDmRelays.
+     */
+    private suspend fun fetchRelaysForParticipant(pubkey: String, relayPool: RelayPool): List<String> {
+        val subId = "dm_relay_${pubkey.take(8)}"
+        val filter = Filter(kinds = listOf(Nip51.KIND_DM_RELAYS), authors = listOf(pubkey), limit = 1)
+        val reqMsg = ClientMessage.req(subId, filter)
+        for (url in RelayConfig.DEFAULT_INDEXER_RELAYS) {
+            relayPool.sendToRelayOrEphemeral(url, reqMsg, skipBadCheck = true)
+        }
+        relayPool.sendToAll(reqMsg)
+
+        // Collect all responses within 4s; pick the freshest (highest created_at)
+        val results = mutableListOf<RelayEvent>()
+        withTimeoutOrNull(4000L) {
+            relayPool.relayEvents
+                .filter { it.subscriptionId == subId }
+                .collect { results.add(it) }
+        }
+
+        val closeMsg = ClientMessage.close(subId)
+        for (url in RelayConfig.DEFAULT_INDEXER_RELAYS) relayPool.sendToRelay(url, closeMsg)
+        relayPool.sendToAll(closeMsg)
+
+        val best = results.maxByOrNull { it.event.created_at }
+        if (best != null) {
+            val urls = Nip51.parseRelaySet(best.event)
+            if (urls.isNotEmpty()) {
+                dmRepo?.cacheDmRelays(pubkey, urls)
+                return urls
+            }
+        }
+        return emptyList()
     }
 
     /**

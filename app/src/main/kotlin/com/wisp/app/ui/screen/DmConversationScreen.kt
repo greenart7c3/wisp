@@ -22,10 +22,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,9 +46,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.wisp.app.nostr.DmMessage
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,10 +70,12 @@ import com.wisp.app.repo.EventRepository
 import com.wisp.app.repo.RelayInfoRepository
 import com.wisp.app.ui.component.DmBubble
 import com.wisp.app.ui.component.ProfilePicture
+import com.wisp.app.ui.component.ZapDialog
 import com.wisp.app.nostr.NostrSigner
 import com.wisp.app.viewmodel.DeliveryRelaySource
 import com.wisp.app.viewmodel.DmConversationViewModel
 import com.wisp.app.viewmodel.PowStatus
+import com.wisp.app.viewmodel.SocialActionManager
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,7 +91,11 @@ fun DmConversationScreen(
     onProfileClick: ((String) -> Unit)? = null,
     onNoteClick: ((String) -> Unit)? = null,
     peerPubkey: String? = null,
-    signer: NostrSigner? = null
+    participants: List<String> = emptyList(),
+    signer: NostrSigner? = null,
+    socialActionManager: SocialActionManager? = null,
+    isWalletConnected: Boolean = false,
+    onGoToWallet: () -> Unit = {}
 ) {
     val messages by viewModel.messages.collectAsState()
     val messageText by viewModel.messageText.collectAsState()
@@ -90,13 +103,34 @@ fun DmConversationScreen(
     val sendError by viewModel.sendError.collectAsState()
     val uploadProgress by viewModel.uploadProgress.collectAsState()
     val peerDelivery by viewModel.peerDeliveryRelays.collectAsState()
+    val allParticipantRelays by viewModel.allParticipantRelays.collectAsState()
     val userDmRelays by viewModel.userDmRelays.collectAsState()
-    val decrypting by viewModel.decrypting.collectAsState()
-    val pendingDecryptCount by viewModel.pendingDecryptCount.collectAsState()
     val miningStatus by viewModel.miningStatus.collectAsState()
+    val replyingTo by viewModel.replyingToMessage.collectAsState()
+    val selectedMessageId by viewModel.selectedMessageId.collectAsState()
+    val isGroup = participants.size > 1
     val listState = rememberLazyListState()
     var showRelayInfo by remember { mutableStateOf(false) }
-    val totalRelayCount = (peerDelivery.urls.size + userDmRelays.size)
+    var debugMessage by remember { mutableStateOf<DmMessage?>(null) }
+    var zapTargetMessage by remember { mutableStateOf<DmMessage?>(null) }
+    var zapPendingSats by remember { mutableLongStateOf(0L) }
+    var lastZappedMessage by remember { mutableStateOf<DmMessage?>(null) }
+    val zapSatsMap = remember { mutableStateMapOf<String, Long>() }
+    val zapInProgress by (socialActionManager?.zapInProgress ?: kotlinx.coroutines.flow.MutableStateFlow(emptySet())).collectAsState()
+
+    // Record sats on the bubble once zap completes (keyed by senderPubkey)
+    LaunchedEffect(socialActionManager) {
+        socialActionManager?.zapSuccess?.collect { key ->
+            val msg = lastZappedMessage
+            if (msg != null && key == msg.senderPubkey) {
+                zapSatsMap[msg.id] = (zapSatsMap[msg.id] ?: 0L) + zapPendingSats / 1000
+                lastZappedMessage = null
+                zapPendingSats = 0L
+            }
+        }
+    }
+    val totalRelayCount = (allParticipantRelays.values.sumOf { it.urls.size } + userDmRelays.size)
+        .coerceAtLeast(peerDelivery.urls.size + userDmRelays.size)
     val context = LocalContext.current
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -118,22 +152,54 @@ fun DmConversationScreen(
             Column {
                 TopAppBar(
                     title = {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.clickable(enabled = peerPubkey != null && onProfileClick != null) {
-                                peerPubkey?.let { onProfileClick?.invoke(it) }
+                        if (isGroup) {
+                            // Group DM header: stacked avatars + participant names
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box {
+                                    participants.take(3).forEachIndexed { i, pubkey ->
+                                        val profile = remember(pubkey) { eventRepo?.getProfileData(pubkey) }
+                                        ProfilePicture(
+                                            url = profile?.picture,
+                                            size = 28,
+                                            modifier = Modifier.offset(x = (i * 12).dp)
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.width((participants.take(3).size * 12 + 4).dp))
+                                Column {
+                                    val names = participants.take(3).joinToString(", ") { pk ->
+                                        eventRepo?.getProfileData(pk)?.displayString
+                                            ?: pk.take(8) + "…"
+                                    }
+                                    val suffix = if (participants.size > 3) " +${participants.size - 3}" else ""
+                                    Text(
+                                        names + suffix,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        "${participants.size + 1} people",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
-                        ) {
-                            ProfilePicture(
-                                url = peerProfile?.picture,
-                                size = 32
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Text(
-                                peerProfile?.displayString ?: "Chat",
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                        } else {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable(enabled = peerPubkey != null && onProfileClick != null) {
+                                    peerPubkey?.let { onProfileClick?.invoke(it) }
+                                }
+                            ) {
+                                ProfilePicture(url = peerProfile?.picture, size = 32)
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    peerProfile?.displayString ?: "Chat",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     },
                     navigationIcon = {
@@ -186,18 +252,24 @@ fun DmConversationScreen(
                                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
                                 .padding(horizontal = 16.dp, vertical = 8.dp)
                         ) {
-                            if (peerDelivery.urls.isNotEmpty()) {
+                            // Show relay info for each participant (works for 1:1 and group)
+                            val displayRelays = allParticipantRelays.ifEmpty {
+                                if (peerDelivery.urls.isNotEmpty()) mapOf(peerPubkey.orEmpty() to peerDelivery) else emptyMap()
+                            }
+                            displayRelays.entries.forEachIndexed { index, (pubkey, delivery) ->
+                                if (index > 0) Spacer(Modifier.height(6.dp))
+                                val participantProfile = eventRepo?.getProfileData(pubkey)
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    ProfilePicture(url = peerProfile?.picture, size = 20)
+                                    ProfilePicture(url = participantProfile?.picture, size = 20)
                                     Spacer(Modifier.width(8.dp))
                                     Text(
-                                        text = peerProfile?.displayString ?: "Peer",
+                                        text = participantProfile?.displayString ?: pubkey.take(8) + "…",
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onSurface,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
-                                    val sourceLabel = when (peerDelivery.source) {
+                                    val sourceLabel = when (delivery.source) {
                                         DeliveryRelaySource.DM_RELAYS -> null
                                         DeliveryRelaySource.READ_RELAYS -> "inbox"
                                         DeliveryRelaySource.WRITE_RELAYS -> "write"
@@ -212,7 +284,7 @@ fun DmConversationScreen(
                                         )
                                     }
                                 }
-                                for (url in peerDelivery.urls) {
+                                for (url in delivery.urls) {
                                     Text(
                                         text = url.removePrefix("wss://"),
                                         style = MaterialTheme.typography.bodySmall,
@@ -221,7 +293,7 @@ fun DmConversationScreen(
                                     )
                                 }
                             }
-                            if (peerDelivery.urls.isNotEmpty() && userDmRelays.isNotEmpty()) {
+                            if (displayRelays.isNotEmpty() && userDmRelays.isNotEmpty()) {
                                 Spacer(Modifier.height(6.dp))
                             }
                             if (userDmRelays.isNotEmpty()) {
@@ -256,35 +328,14 @@ fun DmConversationScreen(
                 .navigationBarsPadding()
                 .imePadding()
         ) {
-            // Decrypting indicator (remote signer mode)
-            AnimatedVisibility(visible = decrypting) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(14.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = if (pendingDecryptCount > 0) "Decrypting messages ($pendingDecryptCount remaining)..."
-                               else "Decrypting messages...",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
             LazyColumn(
                 state = listState,
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth(),
+                    .fillMaxWidth()
+                    .clickable(indication = null, interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }) {
+                        viewModel.selectMessage(null)
+                    },
                 reverseLayout = true
             ) {
                 var lastDateKey = ""
@@ -294,13 +345,21 @@ fun DmConversationScreen(
                             url to relayInfoRepo?.getIconUrl(url)
                         }
                         DmBubble(
-                            content = msg.content,
-                            timestamp = msg.createdAt,
+                            message = msg,
                             isSent = msg.senderPubkey == userPubkey,
+                            isSelected = selectedMessageId == msg.id,
+                            conversationMessages = messages,
                             eventRepo = eventRepo,
                             relayIcons = icons,
+                            onSelect = { viewModel.selectMessage(msg.id) },
+                            onReply = { viewModel.setReplyingTo(it) },
+                            onReact = { m, emoji -> viewModel.sendReaction(m.rumorId, emoji, relayPool, signer) },
+                            onZap = { m -> zapTargetMessage = m },
+                            isZapInProgress = msg.senderPubkey in zapInProgress,
+                            zapSats = msg.zaps.sumOf { it.sats }.coerceAtLeast(zapSatsMap[msg.id] ?: 0L),
                             onProfileClick = onProfileClick,
-                            onNoteClick = onNoteClick
+                            onNoteClick = onNoteClick,
+                            onDebugTap = { debugMessage = it }
                         )
                     }
                     val dateKey = dayKey(msg.createdAt)
@@ -311,6 +370,11 @@ fun DmConversationScreen(
                         }
                     }
                 }
+            }
+
+            // Dismiss selection on scroll
+            LaunchedEffect(listState.isScrollInProgress) {
+                if (listState.isScrollInProgress) viewModel.selectMessage(null)
             }
 
             // Upload progress banner
@@ -340,6 +404,43 @@ fun DmConversationScreen(
             // Clear error when user starts typing again
             LaunchedEffect(messageText) {
                 if (messageText.isNotBlank()) viewModel.clearSendError()
+            }
+
+            // Reply preview strip
+            AnimatedVisibility(visible = replyingTo != null) {
+                val msg = replyingTo
+                if (msg != null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            val senderName = remember(msg.senderPubkey) {
+                                if (msg.senderPubkey == userPubkey) "You"
+                                else eventRepo?.getProfileData(msg.senderPubkey)?.displayString
+                                    ?: msg.senderPubkey.take(8) + "…"
+                            }
+                            Text(
+                                "Replying to $senderName",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                msg.content,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        IconButton(onClick = { viewModel.clearReply() }) {
+                            Icon(Icons.Outlined.Close, "Cancel reply", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
             }
 
             // Message input
@@ -408,6 +509,64 @@ fun DmConversationScreen(
             }
         }
     }
+
+    debugMessage?.let { msg ->
+        DmDebugDialog(message = msg, onDismiss = { debugMessage = null })
+    }
+
+    if (zapTargetMessage != null) {
+        ZapDialog(
+            isWalletConnected = isWalletConnected,
+            onDismiss = { zapTargetMessage = null },
+            onZap = { amountMsats, message, isAnonymous, _ ->
+                val target = zapTargetMessage ?: return@ZapDialog
+                zapPendingSats = amountMsats
+                lastZappedMessage = target
+                zapTargetMessage = null
+                socialActionManager?.sendZapToPubkey(target.senderPubkey, amountMsats, message, isAnonymous, rumorId = target.rumorId.ifEmpty { null })
+            },
+            onGoToWallet = {
+                zapTargetMessage = null
+                onGoToWallet()
+            }
+        )
+    }
+}
+
+@Composable
+private fun DmDebugDialog(message: DmMessage, onDismiss: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var tab by remember { mutableIntStateOf(0) }
+    val json = if (tab == 0) message.debugGiftWrapJson ?: "(not available)" else message.debugRumorJson ?: "(not available)"
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            androidx.compose.material3.TabRow(selectedTabIndex = tab) {
+                androidx.compose.material3.Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Gift Wrap") })
+                androidx.compose.material3.Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Rumor") })
+            }
+        },
+        text = {
+            Text(
+                text = json,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    fontSize = 10.sp
+                ),
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            )
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = {
+                val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("dm_debug", json))
+            }) { Text("Copy") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
 }
 
 @Composable

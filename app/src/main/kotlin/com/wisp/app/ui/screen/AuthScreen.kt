@@ -170,6 +170,7 @@ fun AuthScreen(
                 onClick = {
                     if (viewModel.signUp()) onAuthenticated(true)
                 },
+                enabled = torStatus != TorStatus.STARTING,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Sign Up")
@@ -213,6 +214,7 @@ fun AuthScreen(
             onClick = {
                 if (viewModel.logIn()) onAuthenticated(false)
             },
+            enabled = torStatus != TorStatus.STARTING,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Log In")
@@ -229,6 +231,7 @@ fun AuthScreen(
                     val intent = RemoteSignerBridge.buildGetPublicKeyIntent(permissions)
                     signerLauncher.launch(intent)
                 },
+                enabled = torStatus != TorStatus.STARTING,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Login with Signer")

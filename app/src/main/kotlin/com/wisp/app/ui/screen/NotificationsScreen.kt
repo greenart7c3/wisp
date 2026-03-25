@@ -36,6 +36,7 @@ import androidx.compose.material.icons.outlined.AlternateEmail
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.CurrencyBitcoin
+import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.MailOutline
 import androidx.compose.material.icons.outlined.Repeat
@@ -139,6 +140,7 @@ fun NotificationsScreen(
     onPollVote: (String, List<String>) -> Unit = { _, _ -> },
     onUploadMedia: (List<Uri>, onUrl: (String) -> Unit) -> Unit = { _, _ -> },
     onSendDm: (peerPubkey: String, content: String) -> Unit = { _, _ -> },
+    onDmConversationClick: (conversationKey: String) -> Unit = {},
 ) {
     val notifications by viewModel.filteredFlatNotifications.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
@@ -347,7 +349,11 @@ fun NotificationsScreen(
                         userPubkey = userPubkey,
                         postCardParams = postCardParams,
                         onClick = {
-                            expandedId = if (isExpanded) null else item.id
+                            if (item.type == NotificationType.DM_REACTION && item.dmPeerPubkey != null) {
+                                onDmConversationClick(item.dmPeerPubkey)
+                            } else {
+                                expandedId = if (isExpanded) null else item.id
+                            }
                         },
                         onProfileClick = onProfileClick,
                         onSendReply = { replyToEvent, content ->
@@ -509,7 +515,7 @@ private fun ZenNotificationRow(
                     onUploadMedia = onUploadMedia,
                     onReplyFocused = onReplyFocused
                 )
-            } else if (postCardParams != null) {
+            } else if (postCardParams != null && item.type != NotificationType.DM_REACTION) {
                 NoteExpansion(
                     item = item,
                     params = postCardParams
@@ -799,7 +805,24 @@ private fun ReferencedNotePostCard(
         onFollowAuthor = { params.onFollowToggle(event.pubkey) },
         onBlockAuthor = { params.onBlockUser(event.pubkey) },
         onMuteThread = {
-            val rootId = Nip10.getRootId(event) ?: event.id
+            val rootId = when (event.kind) {
+                1 -> Nip10.getRootId(event) ?: Nip10.getReplyTarget(event) ?: event.id
+                7, 6 -> {
+                    val refId = event.tags.lastOrNull { it.size >= 2 && it[0] == "e" }?.get(1)
+                    if (refId != null) {
+                        val ref = params.eventRepo?.getEvent(refId)
+                        if (ref != null) Nip10.getRootId(ref) ?: refId else refId
+                    } else event.id
+                }
+                9735 -> {
+                    val refId = event.tags.firstOrNull { it.size >= 2 && it[0] == "e" }?.get(1)
+                    if (refId != null) {
+                        val ref = params.eventRepo?.getEvent(refId)
+                        if (ref != null) Nip10.getRootId(ref) ?: refId else refId
+                    } else event.id
+                }
+                else -> Nip10.getRootId(event) ?: event.id
+            }
             params.onMuteThread(rootId)
         },
         isFollowingAuthor = followingAuthor,
@@ -979,7 +1002,7 @@ private fun InlineReplyComposer(
 @Composable
 private fun NotificationTypeIcon(item: FlatNotificationItem, showSats: Boolean = false) {
     val iconSize = 28.dp
-    if (item.type == NotificationType.ZAP) {
+    if (item.type == NotificationType.ZAP || item.type == NotificationType.DM_ZAP) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
                 Icons.Outlined.CurrencyBitcoin,
@@ -1073,6 +1096,25 @@ private fun NotificationTypeIcon(item: FlatNotificationItem, showSats: Boolean =
                 tint = MaterialTheme.colorScheme.primary
             )
         }
+        NotificationType.DM_REACTION -> {
+            // Show the emoji directly if short enough, otherwise use a heart icon
+            val emoji = item.emoji
+            if (!emoji.isNullOrBlank() && emoji.length <= 4) {
+                androidx.compose.foundation.layout.Box(
+                    modifier = Modifier.size(iconSize),
+                    contentAlignment = androidx.compose.ui.Alignment.Center
+                ) {
+                    Text(emoji, style = MaterialTheme.typography.titleMedium)
+                }
+            } else {
+                Icon(
+                    Icons.Outlined.Favorite,
+                    contentDescription = "DM Reaction",
+                    modifier = Modifier.size(iconSize),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
         NotificationType.VOTE -> {
             Icon(
                 Icons.Outlined.BarChart,
@@ -1081,6 +1123,7 @@ private fun NotificationTypeIcon(item: FlatNotificationItem, showSats: Boolean =
                 tint = MaterialTheme.colorScheme.primary
             )
         }
+        NotificationType.DM_ZAP -> {} // handled by early-return above
     }
 }
 
@@ -1093,6 +1136,8 @@ private fun actionText(item: FlatNotificationItem): String = when (item.type) {
     NotificationType.MENTION -> "mentioned you"
     NotificationType.VOTE -> "voted"
     NotificationType.DM -> "messaged you"
+    NotificationType.DM_REACTION -> "reacted to your message"
+    NotificationType.DM_ZAP -> "zapped your message"
 }
 
 // ── Daily Summary Bar ──────────────────────────────────────────────────

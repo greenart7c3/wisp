@@ -219,7 +219,7 @@ fun ActionBar(
 }
 
 @Composable
-private fun LightningAnimation(modifier: Modifier = Modifier) {
+internal fun LightningAnimation(modifier: Modifier = Modifier) {
     val transition = rememberInfiniteTransition(label = "lightning")
 
     val glowAlpha by transition.animateFloat(

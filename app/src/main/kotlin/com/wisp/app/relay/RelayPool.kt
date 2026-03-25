@@ -273,8 +273,15 @@ class RelayPool {
         }
 
         val existingUrls = dmRelays.map { it.config.url }.toSet()
+        // Bootstrap subscriptions for new relays from an existing DM relay so that
+        // resyncSubscriptions() sends the "dms" subscription when the relay connects.
+        val templateSubs = dmRelays.firstOrNull()?.config?.url?.let { activeSubscriptions[it] }
         for (url in filtered) {
             if (url !in existingUrls) {
+                if (!templateSubs.isNullOrEmpty()) {
+                    activeSubscriptions.getOrPut(url) { java.util.concurrent.ConcurrentHashMap() }
+                        .putAll(templateSubs)
+                }
                 val relay = Relay(RelayConfig(url, read = true, write = true), client, scope)
                 wireByteTracking(relay)
                 dmRelays.add(relay)
@@ -286,7 +293,11 @@ class RelayPool {
     }
 
     fun sendToDmRelays(message: String) {
-        for (relay in dmRelays) relay.send(message)
+        val subId = extractSubId(message)
+        for (relay in dmRelays) {
+            if (subId != null) trackSubscription(relay.config.url, subId, message)
+            relay.send(message)
+        }
     }
 
     fun hasDmRelays(): Boolean = dmRelays.isNotEmpty()

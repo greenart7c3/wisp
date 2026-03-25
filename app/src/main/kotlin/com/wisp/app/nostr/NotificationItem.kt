@@ -1,6 +1,6 @@
 package com.wisp.app.nostr
 
-enum class NotificationType { REACTION, ZAP, REPOST, REPLY, QUOTE, MENTION, VOTE, DM }
+enum class NotificationType { REACTION, ZAP, REPOST, REPLY, QUOTE, MENTION, VOTE, DM, DM_REACTION, DM_ZAP }
 
 data class FlatNotificationItem(
     val id: String,

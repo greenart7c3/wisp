@@ -31,10 +31,13 @@ import com.wisp.app.repo.ZapSender
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
@@ -72,10 +75,48 @@ class SocialActionManager(
     private val _reactionSent = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
     val reactionSent: SharedFlow<Unit> = _reactionSent
 
+    // Non-null while the first-follow confirmation dialog is visible (holds the target pubkey).
+    private val _pendingFirstFollow = MutableStateFlow<String?>(null)
+    val pendingFirstFollow: StateFlow<String?> = _pendingFirstFollow
+
+    // False while we are still checking relays; true once the check confirms no existing list.
+    private val _firstFollowCheckDone = MutableStateFlow(false)
+    val firstFollowCheckDone: StateFlow<Boolean> = _firstFollowCheckDone
+
+    private var followCheckJob: Job? = null
+
     fun toggleFollow(pubkey: String) {
         val s = getSigner() ?: return
+        val isCurrentlyFollowing = contactRepo.isFollowing(pubkey)
         val currentList = contactRepo.getFollowList()
-        val newList = if (contactRepo.isFollowing(pubkey)) {
+
+        if (!isCurrentlyFollowing && currentList.isEmpty()) {
+            // Show the dialog immediately so the follow is blocked, then check relays in background.
+            _pendingFirstFollow.value = pubkey
+            _firstFollowCheckDone.value = false
+
+            followCheckJob?.cancel()
+            followCheckJob = scope.launch {
+                val relayList = fetchMyFollowListFromRelays()
+                if (_pendingFirstFollow.value == null) return@launch // user already dismissed
+                if (!relayList.isNullOrEmpty()) {
+                    // Relay returned an existing follow list — add and publish silently.
+                    _pendingFirstFollow.value = null
+                    _firstFollowCheckDone.value = false
+                    val newList = Nip02.addFollow(relayList, pubkey)
+                    val tags = Nip02.buildFollowTags(newList)
+                    val event = s.signEvent(kind = 3, content = "", tags = tags)
+                    relayPool.sendToWriteRelays(ClientMessage.event(event))
+                    contactRepo.updateFromEvent(event)
+                } else {
+                    // Confirmed no existing list — let user decide.
+                    _firstFollowCheckDone.value = true
+                }
+            }
+            return
+        }
+
+        val newList = if (isCurrentlyFollowing) {
             Nip02.removeFollow(currentList, pubkey)
         } else {
             Nip02.addFollow(currentList, pubkey)
@@ -86,6 +127,41 @@ class SocialActionManager(
             relayPool.sendToWriteRelays(ClientMessage.event(event))
             contactRepo.updateFromEvent(event)
         }
+    }
+
+    fun confirmFirstFollow() {
+        val pubkey = _pendingFirstFollow.value ?: return
+        _pendingFirstFollow.value = null
+        _firstFollowCheckDone.value = false
+        followCheckJob?.cancel()
+        followCheckJob = null
+        val s = getSigner() ?: return
+        val currentList = contactRepo.getFollowList()
+        val newList = Nip02.addFollow(currentList, pubkey)
+        val tags = Nip02.buildFollowTags(newList)
+        scope.launch {
+            val event = s.signEvent(kind = 3, content = "", tags = tags)
+            relayPool.sendToWriteRelays(ClientMessage.event(event))
+            contactRepo.updateFromEvent(event)
+        }
+    }
+
+    fun dismissFirstFollow() {
+        _pendingFirstFollow.value = null
+        _firstFollowCheckDone.value = false
+        followCheckJob?.cancel()
+        followCheckJob = null
+    }
+
+    private suspend fun fetchMyFollowListFromRelays(): List<Nip02.FollowEntry>? {
+        val myPubkey = getUserPubkey() ?: return null
+        val subId = "check-fl-${myPubkey.take(8)}"
+        relayPool.sendToReadRelays(ClientMessage.req(subId, Filter(kinds = listOf(3), authors = listOf(myPubkey), limit = 1)))
+        val result = withTimeoutOrNull(5_000) {
+            contactRepo.followList.first { it.isNotEmpty() }
+        }
+        relayPool.closeOnAllRelays(subId)
+        return result
     }
 
     fun followAll(pubkeys: Set<String>) {
@@ -120,6 +196,7 @@ class SocialActionManager(
     fun muteThread(rootEventId: String) {
         muteRepo.muteThread(rootEventId)
         notifRepo.purgeThread(rootEventId)
+        eventRepo.purgeThread(rootEventId)
     }
 
     fun updateMutedWords() {
@@ -312,6 +389,39 @@ class SocialActionManager(
                     relayPool.closeOnAllRelays(receiptSubId)
                     if (isPrivate) relayPool.closeOnAllRelays("zap-rcpt-dm-${event.id.take(12)}")
                 }
+            )
+        }
+    }
+
+    fun sendZapToPubkey(
+        pubkey: String,
+        amountMsats: Long,
+        message: String = "",
+        isAnonymous: Boolean = false,
+        rumorId: String? = null
+    ) {
+        val lud16 = eventRepo.getProfileData(pubkey)?.lud16
+        if (lud16.isNullOrBlank()) {
+            _zapError.tryEmit("This user has no lightning address")
+            return
+        }
+        val wallet = getWalletProvider()
+        if (wallet.hasConnection() && !wallet.isConnected.value) wallet.connect()
+        scope.launch {
+            _zapInProgress.value = _zapInProgress.value + pubkey
+            val result = zapSender.sendZap(
+                recipientLud16 = lud16,
+                recipientPubkey = pubkey,
+                eventId = rumorId,
+                amountMsats = amountMsats,
+                message = message,
+                isAnonymous = isAnonymous,
+                isPrivate = false
+            )
+            _zapInProgress.value = _zapInProgress.value - pubkey
+            result.fold(
+                onSuccess = { _zapSuccess.tryEmit(pubkey) },
+                onFailure = { e -> _zapError.tryEmit(e.message ?: "Zap failed") }
             )
         }
     }
