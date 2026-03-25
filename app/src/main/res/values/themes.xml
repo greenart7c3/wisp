@@ -8,7 +8,7 @@
 
     <style name="Theme.Wisp.Splash" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@android:color/black</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_logo_round</item>
         <item name="postSplashScreenTheme">@style/Theme.Wisp</item>
     </style>
 </resources>
