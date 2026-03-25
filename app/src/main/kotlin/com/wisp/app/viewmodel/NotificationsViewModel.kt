@@ -269,15 +269,17 @@ class NotificationsViewModel(app: Application) : AndroidViewModel(app) {
                     if (pool.hasDmRelays()) pool.sendToDmRelays(selfMsg)
                     else pool.sendToWriteRelays(selfMsg)
 
+                    val convKey = DmRepository.conversationKey(listOf(peerPubkey, signer.pubkeyHex))
                     val dmMsg = DmMessage(
                         id = "${recipientWrap.id}:${System.currentTimeMillis() / 1000}",
                         senderPubkey = signer.pubkeyHex,
                         content = text,
                         createdAt = System.currentTimeMillis() / 1000,
                         giftWrapId = recipientWrap.id,
-                        relayUrls = sentRelayUrls
+                        relayUrls = sentRelayUrls,
+                        participants = listOf(peerPubkey)
                     )
-                    repo.addMessage(dmMsg, peerPubkey)
+                    repo.addMessage(dmMsg, convKey)
                     repo.markGiftWrapSeen(selfWrap.id, dmMsg.id)
                 } else {
                     // Local signer mode
@@ -306,15 +308,17 @@ class NotificationsViewModel(app: Application) : AndroidViewModel(app) {
                     if (pool.hasDmRelays()) pool.sendToDmRelays(selfMsg)
                     else pool.sendToWriteRelays(selfMsg)
 
+                    val convKey = DmRepository.conversationKey(listOf(peerPubkey, senderPubkeyHex))
                     val dmMsg = DmMessage(
                         id = "${recipientWrap.id}:${System.currentTimeMillis() / 1000}",
                         senderPubkey = senderPubkeyHex,
                         content = text,
                         createdAt = System.currentTimeMillis() / 1000,
                         giftWrapId = recipientWrap.id,
-                        relayUrls = sentRelayUrls
+                        relayUrls = sentRelayUrls,
+                        participants = listOf(peerPubkey)
                     )
-                    repo.addMessage(dmMsg, peerPubkey)
+                    repo.addMessage(dmMsg, convKey)
                     repo.markGiftWrapSeen(selfWrap.id, dmMsg.id)
                 }
             } catch (e: SignerCancelledException) {
