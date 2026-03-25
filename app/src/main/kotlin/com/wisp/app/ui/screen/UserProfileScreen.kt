@@ -107,6 +107,13 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
+private sealed class ProfileZapStatus {
+    object Idle : ProfileZapStatus()
+    data class InProgress(val msats: Long) : ProfileZapStatus()
+    data class Success(val sats: Long) : ProfileZapStatus()
+    data class Failure(val message: String) : ProfileZapStatus()
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun UserProfileScreen(
@@ -150,6 +157,7 @@ fun UserProfileScreen(
     onDeleteEvent: (String, Int) -> Unit = { _, _ -> },
     onAddNoteToList: (String) -> Unit = {},
     onSendDm: (() -> Unit)? = null,
+    onZapProfile: ((amountMsats: Long, message: String, isAnonymous: Boolean) -> Unit)? = null,
     signer: com.wisp.app.nostr.NostrSigner? = null,
     translationRepo: TranslationRepository? = null,
     onArticleClick: ((Int, String, String) -> Unit)? = null,
@@ -183,17 +191,29 @@ fun UserProfileScreen(
     var zapAnimatingIds by remember { mutableStateOf(emptySet<String>()) }
     var zapErrorMessage by remember { mutableStateOf<String?>(null) }
 
+    var showProfileZapDialog by remember { mutableStateOf(false) }
+    var profileZapStatus by remember { mutableStateOf<ProfileZapStatus>(ProfileZapStatus.Idle) }
+
     LaunchedEffect(Unit) {
-        zapSuccess?.collect { eventId ->
-            zapAnimatingIds = zapAnimatingIds + eventId
-            delay(1500)
-            zapAnimatingIds = zapAnimatingIds - eventId
+        zapSuccess?.collect { id ->
+            if (id == profilePubkey) {
+                val msats = (profileZapStatus as? ProfileZapStatus.InProgress)?.msats ?: 0L
+                profileZapStatus = ProfileZapStatus.Success(msats / 1000)
+            } else {
+                zapAnimatingIds = zapAnimatingIds + id
+                delay(1500)
+                zapAnimatingIds = zapAnimatingIds - id
+            }
         }
     }
 
     LaunchedEffect(Unit) {
         zapError?.collect { error ->
-            zapErrorMessage = error
+            if (profileZapStatus is ProfileZapStatus.InProgress) {
+                profileZapStatus = ProfileZapStatus.Failure(error)
+            } else {
+                zapErrorMessage = error
+            }
         }
     }
 
@@ -217,6 +237,52 @@ fun UserProfileScreen(
             onGoToWallet = onWallet,
             canPrivateZap = resolvedCanPrivateZap
         )
+    }
+
+    if (showProfileZapDialog) {
+        ZapDialog(
+            isWalletConnected = isWalletConnected,
+            onDismiss = { showProfileZapDialog = false },
+            onZap = { amountMsats, message, isAnonymous, _ ->
+                showProfileZapDialog = false
+                profileZapStatus = ProfileZapStatus.InProgress(amountMsats)
+                onZapProfile?.invoke(amountMsats, message, isAnonymous)
+            },
+            onGoToWallet = onWallet,
+            canPrivateZap = false
+        )
+    }
+
+    when (val s = profileZapStatus) {
+        is ProfileZapStatus.Idle -> {}
+        is ProfileZapStatus.InProgress -> {
+            AlertDialog(
+                onDismissRequest = {},
+                title = { Text("Sending zap...") },
+                text = { CircularProgressIndicator() },
+                confirmButton = {}
+            )
+        }
+        is ProfileZapStatus.Success -> {
+            AlertDialog(
+                onDismissRequest = { profileZapStatus = ProfileZapStatus.Idle },
+                title = { Text("\u26A1 Zap sent!") },
+                text = { Text("${s.sats} sats sent") },
+                confirmButton = {
+                    TextButton(onClick = { profileZapStatus = ProfileZapStatus.Idle }) { Text(stringResource(R.string.btn_ok)) }
+                }
+            )
+        }
+        is ProfileZapStatus.Failure -> {
+            AlertDialog(
+                onDismissRequest = { profileZapStatus = ProfileZapStatus.Idle },
+                title = { Text(stringResource(R.string.zap_failed)) },
+                text = { Text(s.message) },
+                confirmButton = {
+                    TextButton(onClick = { profileZapStatus = ProfileZapStatus.Idle }) { Text(stringResource(R.string.btn_ok)) }
+                }
+            )
+        }
     }
 
     if (zapErrorMessage != null) {
@@ -436,6 +502,7 @@ fun UserProfileScreen(
                     eventRepo = eventRepo,
                     onNavigateToProfile = onNavigateToProfile,
                     onSendDm = onSendDm,
+                    onZapClick = if (onZapProfile != null) { { showProfileZapDialog = true } } else null,
                     followingCount = followList.size,
                     followedBy = followedBy,
                     followsYou = !isOwnProfile && userPubkey != null && followList.any { it.pubkey == userPubkey },
@@ -875,6 +942,7 @@ private fun ProfileHeader(
     eventRepo: EventRepository? = null,
     onNavigateToProfile: ((String) -> Unit)? = null,
     onSendDm: (() -> Unit)? = null,
+    onZapClick: (() -> Unit)? = null,
     followingCount: Int = 0,
     followedBy: List<String> = emptyList(),
     followsYou: Boolean = false,
@@ -937,6 +1005,15 @@ private fun ProfileHeader(
                                 Icons.AutoMirrored.Filled.Send,
                                 contentDescription = stringResource(R.string.profile_send_message),
                                 tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    if (profile?.lud16 != null && onZapClick != null) {
+                        IconButton(onClick = onZapClick) {
+                            Icon(
+                                Icons.Default.ElectricBolt,
+                                contentDescription = "Zap",
+                                tint = Color(0xFFFFC107)
                             )
                         }
                     }
@@ -1018,18 +1095,26 @@ private fun ProfileHeader(
         }
 
         profile?.lud16?.let { lightning ->
+            val context = LocalContext.current
             Spacer(Modifier.height(6.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.clickable {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Lightning address", lightning))
+                    Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                }
+            ) {
                 Icon(
                     Icons.Default.ElectricBolt,
                     contentDescription = "Lightning address",
                     tint = Color(0xFFFFC107),
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(18.dp)
                 )
                 Spacer(Modifier.width(4.dp))
                 Text(
                     text = lightning,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

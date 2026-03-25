@@ -443,7 +443,8 @@ class NotificationRepository(
         val amount = Nip57.getZapAmountSats(event)
         if (amount <= 0) return false
         val zapperPubkey = Nip57.getZapperPubkey(event) ?: return false
-        val zapETag = event.tags.firstOrNull { it.size >= 2 && it[0] == "e" } ?: return false
+        val zapETag = event.tags.firstOrNull { it.size >= 2 && it[0] == "e" }
+            ?: return mergeProfileZap(event, zapperPubkey, amount)
         val referencedId = zapETag[1]
         val zapHint = zapETag.getOrNull(2)?.takeIf { it.startsWith("wss://") || it.startsWith("ws://") }
         val key = "reactions:$referencedId"
@@ -500,6 +501,24 @@ class NotificationRepository(
             ))
         }
 
+        return true
+    }
+
+    private fun mergeProfileZap(event: NostrEvent, zapperPubkey: String, amount: Long): Boolean {
+        val message = Nip57.getZapMessage(event)
+        val recipientPubkey = event.tags.firstOrNull { it.size >= 2 && it[0] == "p" }?.get(1) ?: return false
+        val flatZapId = "profilezap:${event.id}"
+        if (flatItemIds.add(flatZapId)) {
+            flatItems.add(FlatNotificationItem(
+                id = flatZapId,
+                type = NotificationType.PROFILE_ZAP,
+                actorPubkey = zapperPubkey,
+                referencedEventId = recipientPubkey,
+                timestamp = event.created_at,
+                zapSats = amount,
+                zapMessage = message
+            ))
+        }
         return true
     }
 
