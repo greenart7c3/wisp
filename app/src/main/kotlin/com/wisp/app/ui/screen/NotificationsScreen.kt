@@ -544,6 +544,8 @@ private fun ZenNotificationRow(
                     onUploadMedia = onUploadMedia,
                     onReplyFocused = onReplyFocused
                 )
+            } else if (item.type == NotificationType.DM_ZAP || item.type == NotificationType.PROFILE_ZAP) {
+                ZapMessageExpansion(item = item)
             } else if (postCardParams != null && item.type != NotificationType.DM_REACTION) {
                 NoteExpansion(
                     item = item,
@@ -551,6 +553,26 @@ private fun ZenNotificationRow(
                 )
             }
         }
+    }
+}
+
+// ── Zap Message Expansion (DM_ZAP, PROFILE_ZAP) ─────────────────────────
+
+@Composable
+private fun ZapMessageExpansion(item: FlatNotificationItem) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 56.dp, end = 16.dp, bottom = 12.dp)
+    ) {
+        val msg = item.zapMessage.trim()
+        Text(
+            text = if (msg.isNotEmpty()) "\u201C$msg\u201D" else "This zap doesn\u2019t contain a message.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (msg.isNotEmpty()) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+            fontStyle = if (msg.isEmpty()) androidx.compose.ui.text.font.FontStyle.Italic else androidx.compose.ui.text.font.FontStyle.Normal
+        )
     }
 }
 
@@ -1202,7 +1224,7 @@ private fun InlineReplyComposer(
 @Composable
 private fun NotificationTypeIcon(item: FlatNotificationItem, showSats: Boolean = false) {
     val iconSize = 28.dp
-    if (item.type == NotificationType.ZAP || item.type == NotificationType.DM_ZAP) {
+    if (item.type == NotificationType.ZAP || item.type == NotificationType.DM_ZAP || item.type == NotificationType.PROFILE_ZAP) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
                 Icons.Outlined.CurrencyBitcoin,
@@ -1324,6 +1346,7 @@ private fun NotificationTypeIcon(item: FlatNotificationItem, showSats: Boolean =
             )
         }
         NotificationType.DM_ZAP -> {} // handled by early-return above
+        NotificationType.PROFILE_ZAP -> {} // handled by early-return above
     }
 }
 
@@ -1338,6 +1361,7 @@ private fun actionText(item: FlatNotificationItem): String = when (item.type) {
     NotificationType.DM -> "messaged you"
     NotificationType.DM_REACTION -> "reacted to your message"
     NotificationType.DM_ZAP -> "zapped your message"
+    NotificationType.PROFILE_ZAP -> "zapped your profile"
 }
 
 // ── Daily Summary Bar ──────────────────────────────────────────────────

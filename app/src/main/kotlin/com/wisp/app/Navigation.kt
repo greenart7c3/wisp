@@ -1077,6 +1077,9 @@ fun WispNavHost(
                 onDeleteEvent = { eventId, kind -> feedViewModel.deleteEvent(eventId, kind) },
                 onAddNoteToList = { eventId -> addToListEventId = eventId },
                 onSendDm = if (!isOwnProfile) {{ navController.navigate("dm/$pubkey") }} else null,
+                onZapProfile = if (!isOwnProfile) { { amountMsats, message, isAnonymous ->
+                    feedViewModel.socialActions.sendZapToPubkey(pubkey, amountMsats, message, isAnonymous)
+                } } else null,
                 signer = activeSigner,
                 translationRepo = feedViewModel.translationRepo,
                 onArticleClick = { kind, articleAuthor, articleDTag ->
