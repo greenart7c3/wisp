@@ -597,6 +597,27 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     fun getEvent(id: String): NostrEvent? =
         eventCache[id] ?: eventPersistence?.getEvent(id)?.also { eventCache[id] = it }
 
+    /**
+     * Bulk-load events from ObjectBox into eventCache and seenEventIds without running
+     * the full addEvent pipeline (no engagement counts, no feed insertion). Profiles
+     * (kind 0) are parsed so avatars/names are available immediately. Call rebuildFeedFromCache()
+     * after this to populate feedList from the seeded eventCache.
+     *
+     * Only kinds 0 and 1 are added to seenEventIds. Engagement events (kind 6, 7, 9735)
+     * are intentionally excluded so the engagement subscription can fetch them fresh from
+     * relays without being deduped — their counts/caches are not populated here.
+     */
+    fun seedFromObjectBox(events: List<NostrEvent>) {
+        for (event in events) {
+            if (event.kind != 0 && event.kind != 1) continue
+            if (!seenEventIds.add(event.id)) continue
+            eventCache[event.id] = event
+            if (event.kind == 0) {
+                profileRepo?.updateFromEvent(event)
+            }
+        }
+    }
+
     fun getCacheSize(): Int = eventCache.size
 
     fun bumpEventCacheVersion() { _eventCacheVersion.value++ }

@@ -49,6 +49,7 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import kotlin.coroutines.CoroutineContext
@@ -444,6 +445,19 @@ class StartupCoordinator(
             // Subscribe feed with current follow list and relay routing.
             Log.d("StartupCoord", "Subscribing feed, feedType=${feedSub.feedType.value}")
             feedSub.applyAuthorFilterForFeedType(feedSub.feedType.value)
+
+            // Seed eventCache from ObjectBox so the feed is populated immediately on warm
+            // starts, before the relay response arrives. The relay subscription only needs
+            // to top up with events newer than the saved since timestamp.
+            eventPersistence?.let { persistence ->
+                val cached = withContext(processingContext) { persistence.seedCache(limit = 2000) }
+                if (cached.isNotEmpty()) {
+                    eventRepo.seedFromObjectBox(cached)
+                    eventRepo.rebuildFeedFromCache()
+                    Log.d("StartupCoord", "Seeded ${cached.size} events from ObjectBox into feed cache")
+                }
+            }
+
             feedSub._initLoadingState.value = InitLoadingState.Subscribing
             feedSub.subscribeFeed()
             Log.d("StartupCoord", "subscribeFeed called")
