@@ -35,6 +35,7 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     var deletedEventsRepo: DeletedEventsRepository? = null
     var currentUserPubkey: String? = null
     var eventPersistence: EventPersistence? = null
+    var contactRepo: ContactRepository? = null
     /** Set of current user's DM relay URLs — used to detect private zaps. */
     var dmRelayUrls: Set<String> = emptySet()
     private val eventCache = ConcurrentHashMap<String, NostrEvent>()
@@ -216,7 +217,9 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
                 delay(60_000)
                 val cutoff = System.currentTimeMillis() - 10 * 60 * 1000L
                 recentlySeenPubkeys.entries.removeIf { it.value < cutoff }
-                _onlinePubkeys.value = recentlySeenPubkeys.keys.toList()
+                _onlinePubkeys.value = recentlySeenPubkeys
+                    .filter { it.value >= cutoff }
+                    .keys.toList()
             }
         }
     }
@@ -247,12 +250,15 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
             if (muteRepo?.isThreadMuted(threadRoot) == true) return
         }
         if (deletedEventsRepo?.isDeleted(event.id) == true) return
-        // Track liveness: only count active-content kinds using the event's own timestamp,
-        // so historical fetches and profile metadata don't inflate the online count.
+        // Track liveness: only count followed authors with recent active-content kinds,
+        // so historical fetches, profile metadata, and strangers don't inflate the online count.
         if (event.kind == 1 || event.kind == 6 || event.kind == 7 || event.kind == 30023) {
             val eventTimeMs = event.created_at * 1000L
-            recentlySeenPubkeys.merge(event.pubkey, eventTimeMs) { existing, new -> maxOf(existing, new) }
-            onlineDirty.trySend(Unit)
+            val cutoff = System.currentTimeMillis() - 10 * 60 * 1000L
+            if (eventTimeMs >= cutoff && (contactRepo?.isFollowing(event.pubkey) == true || event.pubkey == currentUserPubkey)) {
+                recentlySeenPubkeys.merge(event.pubkey, eventTimeMs) { existing, new -> maxOf(existing, new) }
+                onlineDirty.trySend(Unit)
+            }
         }
         // Engagement events (reactions, reposts) are only needed for their
         // side effects (counts, details, etc.) — skip eventCache to avoid evicting the

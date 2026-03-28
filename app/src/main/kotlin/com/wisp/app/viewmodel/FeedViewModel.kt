@@ -177,7 +177,9 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         it.deletedEventsRepo = deletedEventsRepo
         it.eventPersistence = eventPersistence
     }
-    val contactRepo = ContactRepository(app, pubkeyHex)
+    val contactRepo = ContactRepository(app, pubkeyHex).also {
+        eventRepo.contactRepo = it
+    }
     val listRepo = ListRepository(app, pubkeyHex)
     val dmRepo = DmRepository(app, pubkeyHex)
     val groupRepo = GroupRepository(app, pubkeyHex)
