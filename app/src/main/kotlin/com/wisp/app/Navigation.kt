@@ -876,7 +876,7 @@ fun WispNavHost(
                         relayUrl.toByteArray(Charsets.UTF_8),
                         android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING
                     )
-                    navController.navigate("group_room/$encoded/$groupId")
+                    navController.navigate("group_room/$encoded/${android.net.Uri.encode(groupId)}")
                 },
                 fetchGroupPreview = { relayUrl, groupId ->
                     groupListViewModel.fetchGroupPreview(relayUrl, groupId)
@@ -1123,7 +1123,7 @@ fun WispNavHost(
                 onPayInvoice = { bolt11 -> feedViewModel.payInvoice(bolt11) },
                 onGroupRoom = { relayUrl, groupId ->
                     val encodedRelay = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(relayUrl.toByteArray())
-                    navController.navigate("group_room/$encodedRelay/$groupId")
+                    navController.navigate("group_room/$encodedRelay/${android.net.Uri.encode(groupId)}")
                 },
                 fetchGroupPreview = { relayUrl, groupId -> groupListViewModel.fetchGroupPreview(relayUrl, groupId) }
             )
@@ -1259,7 +1259,7 @@ fun WispNavHost(
                         relayUrl.toByteArray(Charsets.UTF_8),
                         android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING
                     )
-                    navController.navigate("group_room/$encoded/$groupId")
+                    navController.navigate("group_room/$encoded/${android.net.Uri.encode(groupId)}")
                 }
             )
         }
@@ -1470,7 +1470,7 @@ fun WispNavHost(
                 signer = activeSigner,
                 onBack = { navController.popBackStack() },
                 onProfileClick = { pk -> navController.navigate("profile/$pk") },
-                onGroupDetail = { navController.navigate("group_detail/$encodedRelay/$groupId") },
+                onGroupDetail = { navController.navigate("group_detail/$encodedRelay/${android.net.Uri.encode(groupId)}") },
                 onJoin = { groupListViewModel.joinGroup(relayUrl, groupId, activeSigner) },
                 onAlreadyMember = { groupListViewModel.silentJoin(relayUrl, groupId) },
                 fetchGroupPreview = { rUrl, gId -> groupListViewModel.fetchGroupPreview(rUrl, gId) },
@@ -1728,7 +1728,7 @@ fun WispNavHost(
                 onPayInvoice = { bolt11 -> feedViewModel.payInvoice(bolt11) },
                 onGroupRoom = { relayUrl, groupId ->
                     val encodedRelay = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(relayUrl.toByteArray())
-                    navController.navigate("group_room/$encodedRelay/$groupId")
+                    navController.navigate("group_room/$encodedRelay/${android.net.Uri.encode(groupId)}")
                 },
                 fetchGroupPreview = { relayUrl, groupId -> groupListViewModel.fetchGroupPreview(relayUrl, groupId) }
             )
@@ -1802,7 +1802,7 @@ fun WispNavHost(
                             relayUrl.toByteArray(Charsets.UTF_8),
                             android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING
                         )
-                        navController.navigate("group_room/$encoded/$groupId")
+                        navController.navigate("group_room/$encoded/${android.net.Uri.encode(groupId)}")
                     },
                     groupMetadataProvider = { relayUrl, groupId -> feedViewModel.groupRepo.getRoom(relayUrl, groupId)?.metadata },
                     fetchGroupPreview = { relayUrl, groupId -> groupListViewModel.fetchGroupPreview(relayUrl, groupId) }
@@ -1903,7 +1903,7 @@ fun WispNavHost(
                             relayUrl.toByteArray(Charsets.UTF_8),
                             android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING
                         )
-                        navController.navigate("group_room/$encoded/$groupId")
+                        navController.navigate("group_room/$encoded/${android.net.Uri.encode(groupId)}")
                     },
                     groupMetadataProvider = { relayUrl, groupId -> feedViewModel.groupRepo.getRoom(relayUrl, groupId)?.metadata },
                     fetchGroupPreview = { relayUrl, groupId -> groupListViewModel.fetchGroupPreview(relayUrl, groupId) }
@@ -2051,7 +2051,7 @@ fun WispNavHost(
                             relayUrl.toByteArray(Charsets.UTF_8),
                             android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING
                         )
-                        navController.navigate("group_room/$encoded/$groupId")
+                        navController.navigate("group_room/$encoded/${android.net.Uri.encode(groupId)}")
                     },
                     groupMetadataProvider = { relayUrl, groupId -> feedViewModel.groupRepo.getRoom(relayUrl, groupId)?.metadata },
                     fetchGroupPreview = { relayUrl, groupId -> groupListViewModel.fetchGroupPreview(relayUrl, groupId) }
@@ -2694,7 +2694,7 @@ fun WispNavHost(
                 onPayInvoice = { bolt11 -> feedViewModel.payInvoice(bolt11) },
                 onGroupRoom = { relayUrl, groupId ->
                     val encodedRelay = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(relayUrl.toByteArray())
-                    navController.navigate("group_room/$encodedRelay/$groupId")
+                    navController.navigate("group_room/$encodedRelay/${android.net.Uri.encode(groupId)}")
                 },
                 fetchGroupPreview = { relayUrl, groupId -> groupListViewModel.fetchGroupPreview(relayUrl, groupId) }
             )
