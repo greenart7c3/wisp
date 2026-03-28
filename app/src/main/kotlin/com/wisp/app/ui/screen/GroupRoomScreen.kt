@@ -112,6 +112,7 @@ fun GroupRoomScreen(
     onPickMedia: (() -> Unit)? = null,
     uploadProgress: String? = null,
     onJoin: (() -> Unit)? = null,
+    onAlreadyMember: (() -> Unit)? = null,
     fetchGroupPreview: (suspend (String, String) -> GroupPreview?)? = null,
     myPubkey: String? = null,
     onZap: ((messageId: String, senderPubkey: String) -> Unit)? = null,
@@ -214,6 +215,8 @@ fun GroupRoomScreen(
                 groupId = viewModel.groupId,
                 fetchGroupPreview = fetchGroupPreview,
                 onJoin = onJoin,
+                onAlreadyMember = onAlreadyMember,
+                myPubkey = myPubkey,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
@@ -508,6 +511,8 @@ private fun JoinRoomPrompt(
     groupId: String,
     fetchGroupPreview: (suspend (String, String) -> GroupPreview?)?,
     onJoin: () -> Unit,
+    onAlreadyMember: (() -> Unit)? = null,
+    myPubkey: String? = null,
     modifier: Modifier = Modifier
 ) {
     var preview by remember(relayUrl, groupId) { mutableStateOf<GroupPreview?>(null) }
@@ -515,7 +520,14 @@ private fun JoinRoomPrompt(
 
     LaunchedEffect(relayUrl, groupId) {
         if (relayUrl.isNotEmpty() && groupId.isNotEmpty() && fetchGroupPreview != null) {
-            preview = fetchGroupPreview(relayUrl, groupId)
+            val result = fetchGroupPreview(relayUrl, groupId)
+            // If the user's pubkey appears in the relay's members list they joined via another
+            // client — silently register the group locally instead of showing the join prompt.
+            if (myPubkey != null && result?.members?.contains(myPubkey) == true) {
+                onAlreadyMember?.invoke()
+                return@LaunchedEffect
+            }
+            preview = result
             metadataLoading = false
         } else if (relayUrl.isEmpty() || groupId.isEmpty()) {
             metadataLoading = false

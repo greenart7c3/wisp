@@ -1389,8 +1389,13 @@ fun WispNavHost(
                 groupRoomViewModel.init(groupId, relayUrl, feedViewModel.groupRepo, feedViewModel.relayPool)
                 feedViewModel.metadataFetcher.queueProfileFetch(feedViewModel.getUserPubkey() ?: "")
             }
+            // Only subscribe eagerly if the group is already joined locally —
+            // otherwise messages arrive before the room exists in the repo and get
+            // silently dropped.  joinGroup/silentJoin handle their own subscriptions.
             DisposableEffect(relayUrl, groupId) {
-                groupListViewModel.subscribeToGroup(relayUrl, groupId)
+                if (initialRoom != null) {
+                    groupListViewModel.subscribeToGroup(relayUrl, groupId)
+                }
                 onDispose {
                     groupListViewModel.unsubscribeFromGroup(relayUrl, groupId)
                 }
@@ -1467,6 +1472,7 @@ fun WispNavHost(
                 onProfileClick = { pk -> navController.navigate("profile/$pk") },
                 onGroupDetail = { navController.navigate("group_detail/$encodedRelay/$groupId") },
                 onJoin = { groupListViewModel.joinGroup(relayUrl, groupId, activeSigner) },
+                onAlreadyMember = { groupListViewModel.silentJoin(relayUrl, groupId) },
                 fetchGroupPreview = { rUrl, gId -> groupListViewModel.fetchGroupPreview(rUrl, gId) },
                 onPickMedia = {
                     groupRoomMediaLauncher.launch(

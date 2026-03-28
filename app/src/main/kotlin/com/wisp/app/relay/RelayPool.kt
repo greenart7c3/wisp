@@ -313,6 +313,10 @@ class RelayPool(private val prefs: SharedPreferences? = null) {
         ensureClientCurrent()
         if (url in blockedUrls || !RelayConfig.isConnectableUrl(url)) return
         if (groupRelays.containsKey(url)) return
+        // Remove any stale ephemeral relay for this URL — otherwise sendToRelayOrEphemeral
+        // will skip the group relay fast-path and send REQs on the disconnected ephemeral.
+        ephemeralRelays.remove(url)?.disconnect()
+        ephemeralLastUsed.remove(url)
         val relay = Relay(RelayConfig(url, read = true, write = true), client, scope)
         // autoReconnect defaults to true — subscriptions will be re-sent on reconnect
         wireByteTracking(relay)

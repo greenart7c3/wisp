@@ -33,6 +33,11 @@ class GroupListViewModel(app: Application) : AndroidViewModel(app) {
     /** Groups that currently have an open relay connection and active subscriptions. */
     private val subscribedGroups = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
+    /** Short-lived cache of preview data (metadata + members) for groups not yet joined locally.
+     *  Populated by GroupInviteCard fetches on the feed so that tapping through to GroupRoomScreen
+     *  gets a cache hit instead of a second relay round-trip (which often times out). */
+    private val previewCache = java.util.concurrent.ConcurrentHashMap<String, GroupPreview>()
+
     // Per-author resolved emoji maps fetched from their outbox relays
     private val _peerEmojiMaps = MutableStateFlow<Map<String, Map<String, String>>>(emptyMap())
     val peerEmojiMaps: StateFlow<Map<String, Map<String, String>>> = _peerEmojiMaps
@@ -48,6 +53,7 @@ class GroupListViewModel(app: Application) : AndroidViewModel(app) {
     /** Clears all refs so init() can run again after an account switch. */
     fun reset() {
         subscribedGroups.clear()
+        previewCache.clear()
         fetchedEmojiPubkeys.clear()
         fetchedEmojiSets.clear()
         peerEmojisInternal.clear()
@@ -233,11 +239,33 @@ class GroupListViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Apply any cached preview metadata/members to a freshly-added room. */
+    private fun applyCachedPreview(relayUrl: String, groupId: String) {
+        val repo = groupRepo ?: return
+        val cacheKey = "$relayUrl|$groupId"
+        val cached = previewCache.remove(cacheKey) ?: return
+        cached.metadata?.let { repo.updateMetadata(relayUrl, groupId, it) }
+        if (cached.members.isNotEmpty()) repo.updateMembers(relayUrl, groupId, cached.members)
+    }
+
+    /**
+     * Silently register a group the user already belongs to on the relay (joined via another
+     * client). Adds the room locally and subscribes — no kind-9021 join request is sent.
+     */
+    fun silentJoin(relayUrl: String, groupId: String) {
+        val repo = groupRepo ?: return
+        val normalizedUrl = relayUrl.lowercase().trimEnd('/')
+        repo.addGroup(normalizedUrl, groupId)
+        applyCachedPreview(normalizedUrl, groupId)
+        subscribeToGroup(normalizedUrl, groupId)
+    }
+
     fun joinGroup(relayUrl: String, groupId: String, signer: NostrSigner?) {
         val repo = groupRepo ?: return
         val pool = relayPool ?: return
         val relayUrl = relayUrl.lowercase().trimEnd('/')
         repo.addGroup(relayUrl, groupId)
+        applyCachedPreview(relayUrl, groupId)
         subscribeToGroup(relayUrl, groupId)
         viewModelScope.launch(Dispatchers.Default) {
             signer?.let { s ->
@@ -385,8 +413,15 @@ class GroupListViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun fetchGroupPreview(relayUrl: String, groupId: String): GroupPreview {
         groupRepo?.getRoom(relayUrl, groupId)?.let { room ->
             if (room.metadata != null || room.members.isNotEmpty()) {
-                Log.d("GroupListVM", "[preview] cache hit relay=$relayUrl group=$groupId name=${room.metadata?.name}")
+                Log.d("GroupListVM", "[preview] cache hit (joined) relay=$relayUrl group=$groupId name=${room.metadata?.name}")
                 return GroupPreview(room.metadata, room.members)
+            }
+        }
+        val cacheKey = "$relayUrl|$groupId"
+        previewCache[cacheKey]?.let { cached ->
+            if (cached.metadata != null || cached.members.isNotEmpty()) {
+                Log.d("GroupListVM", "[preview] cache hit (preview) relay=$relayUrl group=$groupId members=${cached.members.size}")
+                return cached
             }
         }
         if (relayUrl.isEmpty() || groupId.isEmpty()) {
@@ -445,7 +480,9 @@ class GroupListViewModel(app: Application) : AndroidViewModel(app) {
             Log.d("GroupListVM", "[preview] members result=${members.size}")
 
             collectJob.cancel()
-            GroupPreview(metadata, members)
+            val preview = GroupPreview(metadata, members)
+            if (metadata != null || members.isNotEmpty()) previewCache[cacheKey] = preview
+            preview
         }
     }
 
