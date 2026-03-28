@@ -276,11 +276,22 @@ class FeedSubscriptionManager(
         // race condition (premature resubscribeFeed() calls from followWatcherJob/connectivity
         // changes get partial events first), so we only write the timestamp after EOSE.
         // All other feed types (RELAY, LIST, TRENDING) ignore this and use their own windows.
-        val twentyFourHoursAgo = System.currentTimeMillis() / 1000 - 60 * 60 * 24
+        // Scale the default since-window by follow count: sparse feeds need a wider window to
+        // surface enough content, while dense feeds should stay narrow to avoid fetching too much.
+        val followCount = contactRepo.getFollowList().size
+        val defaultWindowSeconds = when {
+            followCount <= 10  -> 7 * 24 * 3600L
+            followCount <= 30  -> 5 * 24 * 3600L
+            followCount <= 75  -> 3 * 24 * 3600L
+            followCount <= 150 -> 2 * 24 * 3600L
+            followCount <= 300 -> 36 * 3600L
+            else               -> 24 * 3600L
+        }
+        val defaultSince = System.currentTimeMillis() / 1000 - defaultWindowSeconds
         val savedFeedTs = prefs.getLong("latest_follows_feed_ts", 0L)
-        val sinceTimestamp = if (savedFeedTs > 0) maxOf(savedFeedTs - 5 * 60, twentyFourHoursAgo)
-                             else twentyFourHoursAgo
-        Log.d("RLC", "[FeedSub] resubscribeFeed: since=$sinceTimestamp (savedFeedTs=$savedFeedTs, 24hAgo=$twentyFourHoursAgo)")
+        val sinceTimestamp = if (savedFeedTs > 0) maxOf(savedFeedTs - 5 * 60, defaultSince)
+                             else defaultSince
+        Log.d("RLC", "[FeedSub] resubscribeFeed: since=$sinceTimestamp (savedFeedTs=$savedFeedTs, followCount=$followCount, windowDays=${defaultWindowSeconds/86400})")
         val indexerRelays = getIndexerRelays()
         val excludedUrls = getExcludedRelayUrls()
         val targetedRelays: Set<String> = when (_feedType.value) {
