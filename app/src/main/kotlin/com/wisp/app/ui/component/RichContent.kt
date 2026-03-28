@@ -69,7 +69,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalView
@@ -110,6 +113,9 @@ import kotlinx.coroutines.withContext
 import okhttp3.Request
 import org.json.JSONObject
 import java.net.URLEncoder
+
+// Tag used by Compose's InlineTextContent system to identify inline content placeholders
+private const val INLINE_CONTENT_TAG = "androidx.compose.foundation.text.inlineContent"
 
 data class MediaSettings(
     val autoLoadMedia: Boolean = true,
@@ -631,103 +637,110 @@ fun RichContent(
                 }
                 if (!hasContent) continue
 
-                // Build annotated string for inline segments (skip custom emoji images for now)
-                val hasCustomEmoji = inlineSegments.any { it is ContentSegment.CustomEmojiSegment }
-                if (hasCustomEmoji) {
-                    // Fall back to individual rendering for runs with custom emojis
+                // Build inline content map for any custom emojis in this run
+                val emojiInlineContent: Map<String, InlineTextContent> =
+                    if (inlineSegments.any { it is ContentSegment.CustomEmojiSegment }) {
+                        val emojiSize = style.fontSize
+                        inlineSegments
+                            .filterIsInstance<ContentSegment.CustomEmojiSegment>()
+                            .distinctBy { it.shortcode }
+                            .associate { seg ->
+                                seg.shortcode to InlineTextContent(
+                                    placeholder = Placeholder(
+                                        width = emojiSize * 1.5f,
+                                        height = emojiSize * 1.3f,
+                                        placeholderVerticalAlign = PlaceholderVerticalAlign.Center
+                                    )
+                                ) {
+                                    AsyncImage(
+                                        model = seg.url,
+                                        contentDescription = seg.shortcode,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                            }
+                    } else emptyMap()
+
+                val annotated = buildAnnotatedString {
                     for (seg in inlineSegments) {
                         when (seg) {
                             is ContentSegment.TextSegment -> {
-                                if (seg.text.trim().isNotEmpty()) {
-                                    Text(text = seg.text, style = style, color = color)
+                                withStyle(SpanStyle(color = color)) {
+                                    append(seg.text)
                                 }
                             }
                             is ContentSegment.CustomEmojiSegment -> {
-                                AsyncImage(
-                                    model = seg.url,
-                                    contentDescription = seg.shortcode,
-                                    modifier = Modifier
-                                        .height(with(LocalDensity.current) { style.fontSize.toDp() * 1.3f })
-                                        .padding(horizontal = 1.dp)
+                                pushStringAnnotation(
+                                    tag = INLINE_CONTENT_TAG,
+                                    annotation = seg.shortcode
                                 )
+                                append(":${seg.shortcode}:")
+                                pop()
+                            }
+                            is ContentSegment.HashtagSegment -> {
+                                val tag = seg.tag
+                                withLink(
+                                    LinkAnnotation.Clickable("hashtag") {
+                                        effectiveHashtagClick?.invoke(tag)
+                                    }
+                                ) {
+                                    withStyle(SpanStyle(color = effectiveLinkColor, textDecoration = linkDecoration)) {
+                                        append("#${seg.tag}")
+                                    }
+                                }
+                            }
+                            is ContentSegment.NostrProfileSegment -> {
+                                val pubkey = seg.pubkey
+                                val displayName = profileNames[seg.pubkey] ?: seg.pubkey.take(8)
+                                withLink(
+                                    LinkAnnotation.Clickable("profile") {
+                                        onProfileClick?.invoke(pubkey)
+                                    }
+                                ) {
+                                    withStyle(SpanStyle(color = effectiveLinkColor, textDecoration = linkDecoration)) {
+                                        append("@$displayName")
+                                    }
+                                }
+                            }
+                            is ContentSegment.LinkSegment -> {
+                                val linkUrl = seg.url
+                                val displayUrl = linkUrl.removePrefix("https://").removePrefix("http://")
+                                withLink(
+                                    LinkAnnotation.Clickable("url") {
+                                        uriHandler.openUri(linkUrl)
+                                    }
+                                ) {
+                                    withStyle(SpanStyle(color = effectiveLinkColor, textDecoration = linkDecoration)) {
+                                        append(displayUrl)
+                                    }
+                                }
+                            }
+                            is ContentSegment.InlineLinkSegment -> {
+                                val linkUrl = seg.url
+                                val isRelay = linkUrl.startsWith("wss://") || linkUrl.startsWith("ws://")
+                                val displayUrl = linkUrl
+                                    .removePrefix("https://")
+                                    .removePrefix("http://")
+                                withLink(
+                                    LinkAnnotation.Clickable("url") {
+                                        if (isRelay) {
+                                            effectiveRelayClick?.invoke(linkUrl)
+                                        } else {
+                                            uriHandler.openUri(linkUrl)
+                                        }
+                                    }
+                                ) {
+                                    withStyle(SpanStyle(color = effectiveLinkColor, textDecoration = linkDecoration)) {
+                                        append(displayUrl)
+                                    }
+                                }
                             }
                             else -> {}
                         }
                     }
-                } else {
-                    val annotated = buildAnnotatedString {
-                        for (seg in inlineSegments) {
-                            when (seg) {
-                                is ContentSegment.TextSegment -> {
-                                    withStyle(SpanStyle(color = color)) {
-                                        append(seg.text)
-                                    }
-                                }
-                                is ContentSegment.HashtagSegment -> {
-                                    val tag = seg.tag
-                                    withLink(
-                                        LinkAnnotation.Clickable("hashtag") {
-                                            effectiveHashtagClick?.invoke(tag)
-                                        }
-                                    ) {
-                                        withStyle(SpanStyle(color = effectiveLinkColor, textDecoration = linkDecoration)) {
-                                            append("#${seg.tag}")
-                                        }
-                                    }
-                                }
-                                is ContentSegment.NostrProfileSegment -> {
-                                    val pubkey = seg.pubkey
-                                    val displayName = profileNames[seg.pubkey] ?: seg.pubkey.take(8)
-                                    withLink(
-                                        LinkAnnotation.Clickable("profile") {
-                                            onProfileClick?.invoke(pubkey)
-                                        }
-                                    ) {
-                                        withStyle(SpanStyle(color = effectiveLinkColor, textDecoration = linkDecoration)) {
-                                            append("@$displayName")
-                                        }
-                                    }
-                                }
-                                is ContentSegment.LinkSegment -> {
-                                    val linkUrl = seg.url
-                                    val displayUrl = linkUrl.removePrefix("https://").removePrefix("http://")
-                                    withLink(
-                                        LinkAnnotation.Clickable("url") {
-                                            uriHandler.openUri(linkUrl)
-                                        }
-                                    ) {
-                                        withStyle(SpanStyle(color = effectiveLinkColor, textDecoration = linkDecoration)) {
-                                            append(displayUrl)
-                                        }
-                                    }
-                                }
-                                is ContentSegment.InlineLinkSegment -> {
-                                    val linkUrl = seg.url
-                                    val isRelay = linkUrl.startsWith("wss://") || linkUrl.startsWith("ws://")
-                                    val displayUrl = linkUrl
-                                        .removePrefix("https://")
-                                        .removePrefix("http://")
-                                    withLink(
-                                        LinkAnnotation.Clickable("url") {
-                                            if (isRelay) {
-                                                effectiveRelayClick?.invoke(linkUrl)
-                                            } else {
-                                                uriHandler.openUri(linkUrl)
-                                            }
-                                        }
-                                    ) {
-                                        withStyle(SpanStyle(color = effectiveLinkColor, textDecoration = linkDecoration)) {
-                                            append(displayUrl)
-                                        }
-                                    }
-                                }
-                                else -> {}
-                            }
-                        }
-                    }
-
-                    Text(text = annotated, style = style)
                 }
+
+                Text(text = annotated, style = style, inlineContent = emojiInlineContent)
             } else {
                 val segment = group as ContentSegment
                 when (segment) {

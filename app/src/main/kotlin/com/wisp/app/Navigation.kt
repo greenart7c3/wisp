@@ -1401,6 +1401,7 @@ fun WispNavHost(
             var groupRoomZapTarget by remember { mutableStateOf<com.wisp.app.nostr.NostrEvent?>(null) }
             val groupRoomResolvedEmojis by feedViewModel.customEmojiRepo.resolvedEmojis.collectAsState()
             val groupRoomUnicodeEmojis by feedViewModel.customEmojiRepo.unicodeEmojis.collectAsState()
+            val groupRoomPeerEmojiMaps by groupListViewModel.peerEmojiMaps.collectAsState()
             val groupRoomZapVersion by feedViewModel.eventRepo.zapVersion.collectAsState()
             val groupRoomZapInProgress by feedViewModel.zapInProgress.collectAsState()
             var groupRoomZapAnimatingIds by remember { mutableStateOf(emptySet<String>()) }
@@ -1499,6 +1500,7 @@ fun WispNavHost(
                 },
                 resolvedEmojis = groupRoomResolvedEmojis,
                 unicodeEmojis = groupRoomUnicodeEmojis,
+                peerEmojiMaps = groupRoomPeerEmojiMaps,
                 zapVersion = groupRoomZapVersion,
                 zapAnimatingIds = groupRoomZapAnimatingIds,
                 zapInProgressIds = groupRoomZapInProgress

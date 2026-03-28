@@ -1,7 +1,10 @@
 package com.wisp.app.ui.screen
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +13,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -17,6 +21,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -29,7 +34,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.automirrored.filled.Reply
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.outlined.Close
@@ -54,8 +59,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
@@ -64,6 +75,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -84,6 +96,7 @@ import com.wisp.app.viewmodel.GroupRoomViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -104,10 +117,13 @@ fun GroupRoomScreen(
     onZap: ((messageId: String, senderPubkey: String) -> Unit)? = null,
     resolvedEmojis: Map<String, String> = emptyMap(),
     unicodeEmojis: List<String> = emptyList(),
+    peerEmojiMaps: Map<String, Map<String, String>> = emptyMap(),
     zapVersion: Int = 0,
     zapAnimatingIds: Set<String> = emptySet(),
     zapInProgressIds: Set<String> = emptySet()
 ) {
+    val textFieldFocus = remember { FocusRequester() }
+
     val messages by viewModel.messages.collectAsState()
     val room by viewModel.room.collectAsState()
     // Use initialRoom as a fallback on the first frame before the ViewModel's LaunchedEffect
@@ -134,12 +150,20 @@ fun GroupRoomScreen(
     LaunchedEffect(messages.size) {
         if (messages.isEmpty()) return@LaunchedEffect
         if (prevMessageCount == 0) {
-            // Initial load: jump instantly to bottom without animation
             listState.scrollToItem(messages.size - 1)
         } else if (messages.size > prevMessageCount) {
             listState.animateScrollToItem(messages.size - 1)
         }
         prevMessageCount = messages.size
+    }
+
+    // Snap to newest messages when keyboard opens
+    val density = LocalDensity.current
+    val imeBottom = WindowInsets.ime.getBottom(density)
+    LaunchedEffect(imeBottom) {
+        if (imeBottom > 0 && messages.isNotEmpty()) {
+            listState.scrollToItem(messages.size - 1)
+        }
     }
 
     val isJoined = effectiveRoom != null
@@ -199,6 +223,7 @@ fun GroupRoomScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
+                    .imePadding()
             ) {
                 GroupMemberAvatarStrip(
                     messages = messages,
@@ -219,12 +244,16 @@ fun GroupRoomScreen(
                             myPubkey = myPubkey,
                             reactionEmojiUrls = effectiveRoom?.reactionEmojiUrls ?: emptyMap(),
                             resolvedEmojis = resolvedEmojis,
+                            peerEmojiMap = peerEmojiMaps[message.senderPubkey] ?: emptyMap(),
                             unicodeEmojis = unicodeEmojis,
                             zapVersion = zapVersion,
                             isZapAnimating = message.id in zapAnimatingIds,
                             isZapInProgress = message.id in zapInProgressIds,
                             onProfileClick = onProfileClick,
-                            onReply = { viewModel.setReplyTarget(it) },
+                            onReply = {
+                                viewModel.setReplyTarget(it)
+                                textFieldFocus.requestFocus()
+                            },
                             onReact = { msgId, pubkey, emoji ->
                                 viewModel.sendReaction(msgId, pubkey, emoji, signer, relayPool, resolvedEmojis)
                             },
@@ -273,7 +302,7 @@ fun GroupRoomScreen(
                             .padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         Icon(
-                            Icons.AutoMirrored.Filled.Reply,
+                            Icons.Outlined.ChatBubbleOutline,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(16.dp)
@@ -416,7 +445,6 @@ fun GroupRoomScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .imePadding()
                         .padding(horizontal = 8.dp, vertical = 8.dp)
                 ) {
                     if (onPickMedia != null) {
@@ -443,7 +471,9 @@ fun GroupRoomScreen(
                             }
                         },
                         placeholder = { Text(stringResource(R.string.placeholder_message)) },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(textFieldFocus),
                         maxLines = 5,
                         enabled = uploadProgress == null,
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences)
@@ -614,6 +644,7 @@ private fun GroupMessageBubble(
     myPubkey: String?,
     reactionEmojiUrls: Map<String, String>,
     resolvedEmojis: Map<String, String>,
+    peerEmojiMap: Map<String, String> = emptyMap(),
     unicodeEmojis: List<String>,
     zapVersion: Int = 0,
     isZapAnimating: Boolean = false,
@@ -637,19 +668,63 @@ private fun GroupMessageBubble(
         message.replyToId?.let { id -> allMessages.firstOrNull { it.id == id } }
     }
 
-    // Combined emoji map: message's own emoji tags + room's accumulated reaction emoji URLs
-    val messageEmojiMap = remember(message.emojiTags, reactionEmojiUrls) {
-        reactionEmojiUrls + message.emojiTags
+    // Combined emoji map: our library → sender's library → room reactions → message's own tags (highest priority)
+    val messageEmojiMap = remember(message.emojiTags, reactionEmojiUrls, resolvedEmojis, peerEmojiMap) {
+        resolvedEmojis + peerEmojiMap + reactionEmojiUrls + message.emojiTags
     }
 
     // Zap totals — re-evaluated whenever zapVersion ticks
     val zapSats = remember(message.id, zapVersion) { eventRepo.getZapSats(message.id) }
     val hasZaps = zapSats > 0
 
+    val swipeOffset = remember { Animatable(0f) }
+    val density = LocalDensity.current
+    val swipeThreshold = remember(density) { with(density) { 80.dp.toPx() } }
+    val scope = rememberCoroutineScope()
+
+    Box(modifier = Modifier.fillMaxWidth()) {
+        // Reply icon revealed behind the message as you swipe
+        Icon(
+            Icons.Outlined.ChatBubbleOutline,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = 20.dp)
+                .size(20.dp)
+                .alpha((swipeOffset.value / swipeThreshold).coerceIn(0f, 1f))
+        )
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .offset { IntOffset(swipeOffset.value.toInt(), 0) }
+            .pointerInput(message.id) {
+                var triggered = false
+                detectHorizontalDragGestures(
+                    onDragStart = { triggered = false },
+                    onDragEnd = {
+                        scope.launch { swipeOffset.animateTo(0f, spring()) }
+                        triggered = false
+                    },
+                    onDragCancel = {
+                        scope.launch { swipeOffset.animateTo(0f, spring()) }
+                        triggered = false
+                    },
+                    onHorizontalDrag = { _, dragAmount ->
+                        if (dragAmount > 0 && !triggered) {
+                            val next = (swipeOffset.value + dragAmount).coerceIn(0f, swipeThreshold * 1.3f)
+                            scope.launch { swipeOffset.snapTo(next) }
+                            if (next >= swipeThreshold) {
+                                triggered = true
+                                onReply(message)
+                                scope.launch { swipeOffset.animateTo(0f, spring()) }
+                            }
+                        }
+                    }
+                )
+            },
         verticalAlignment = Alignment.Top
     ) {
         ProfilePicture(
@@ -776,23 +851,23 @@ private fun GroupMessageBubble(
                     modifier = Modifier.padding(top = 2.dp)
                 ) {
                     // Reply
-                    IconButton(onClick = { onReply(message) }, modifier = Modifier.size(28.dp)) {
+                    IconButton(onClick = { onReply(message) }, modifier = Modifier.size(36.dp)) {
                         Icon(
-                            Icons.AutoMirrored.Filled.Reply,
+                            Icons.Outlined.ChatBubbleOutline,
                             contentDescription = "Reply",
-                            modifier = Modifier.size(14.dp),
+                            modifier = Modifier.size(18.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     // React — opens emoji picker
                     IconButton(
                         onClick = { showEmojiPicker = true },
-                        modifier = Modifier.size(28.dp)
+                        modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
                             Icons.Filled.FavoriteBorder,
                             contentDescription = "React",
-                            modifier = Modifier.size(14.dp),
+                            modifier = Modifier.size(18.dp),
                             tint = if (myReactions.isNotEmpty()) MaterialTheme.colorScheme.error
                                    else MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -808,13 +883,13 @@ private fun GroupMessageBubble(
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(28.dp)
+                                        .size(36.dp)
                                         .wrapContentSize(unbounded = true, align = Alignment.Center)
                                 ) {
                                     Icon(
                                         Icons.Filled.Bolt,
                                         contentDescription = "Zap",
-                                        modifier = Modifier.size(14.dp),
+                                        modifier = Modifier.size(18.dp),
                                         tint = when {
                                             isZapInProgress -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                                             hasZaps || isZapAnimating -> com.wisp.app.ui.theme.WispThemeColors.zapColor
@@ -857,6 +932,7 @@ private fun GroupMessageBubble(
             }
         }
     }
+    } // close swipe Box
 }
 
 private val groupTimeFormat = SimpleDateFormat("HH:mm", Locale.US)
