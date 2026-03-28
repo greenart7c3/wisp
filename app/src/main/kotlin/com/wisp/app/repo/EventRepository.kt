@@ -546,7 +546,11 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
         if (eventCache.containsKey(event.id)) return
         seenEventIds.add(event.id)
         eventCache[event.id] = event
-        eventPersistence?.persistEvent(event)
+        // Don't persist future-dated notes — scheduled posts fetched from the scheduler
+        // relay would poison the ObjectBox cache and the feed's since filter on next boot.
+        if (event.created_at <= System.currentTimeMillis() / 1000 + 30) {
+            eventPersistence?.persistEvent(event)
+        }
         relayHintStore?.extractHintsFromTags(event)
         if (event.kind == 0) {
             val updated = profileRepo?.updateFromEvent(event)
@@ -1003,6 +1007,7 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
         for ((_, event) in snapshot) {
             if (event.kind != 1) continue
             if (event.created_at < sinceTimestamp) continue
+            if (event.created_at > System.currentTimeMillis() / 1000 + 30) continue  // skip future-dated (scheduled) notes
             if (muteRepo?.isBlocked(event.pubkey) == true) continue
             if (deletedEventsRepo?.isDeleted(event.id) == true) continue
             val threadRoot = Nip10.getRootId(event) ?: Nip10.getReplyTarget(event) ?: event.id

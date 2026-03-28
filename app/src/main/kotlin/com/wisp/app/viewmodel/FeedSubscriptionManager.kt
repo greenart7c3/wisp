@@ -377,8 +377,10 @@ class FeedSubscriptionManager(
             subManager.awaitEoseCount(feedSubId, eoseTarget)
             Log.d("RLC", "[FeedSub] EOSE received, feed loaded")
             eventRepo.getNewestFeedEventTimestamp()?.let { ts ->
-                prefs.edit().putLong("latest_follows_feed_ts", ts).apply()
-                Log.d("RLC", "[FeedSub] saved latest_follows_feed_ts=$ts")
+                val now = System.currentTimeMillis() / 1000
+                val safeTsVal = minOf(ts, now)
+                prefs.edit().putLong("latest_follows_feed_ts", safeTsVal).apply()
+                Log.d("RLC", "[FeedSub] saved latest_follows_feed_ts=$safeTsVal (raw=$ts, now=$now)")
             }
             _initialLoadDone.value = true
             _initLoadingState.value = InitLoadingState.Done
