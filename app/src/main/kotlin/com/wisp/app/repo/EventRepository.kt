@@ -121,8 +121,8 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
 
     // Poll vote tracking: pollId -> (optionId -> count)
     private val pollVoteCounts = LruCache<String, ConcurrentHashMap<String, Int>>(5000)
-    // pollId -> (voterPubkey -> timestamp) for one-vote-per-pubkey enforcement
-    private val pollVoters = LruCache<String, ConcurrentHashMap<String, Long>>(5000)
+    // pollId -> (voterPubkey -> (timestamp, optionIds)) for one-vote-per-pubkey enforcement
+    private val pollVoters = LruCache<String, ConcurrentHashMap<String, Pair<Long, List<String>>>>(5000)
     // pollId -> selected option IDs for current user
     private val userPollVotes = LruCache<String, List<String>>(5000)
     private val _pollVoteVersion = MutableStateFlow(0)
@@ -456,9 +456,9 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
 
         // One-vote-per-pubkey enforcement (latest timestamp wins)
         val voters = pollVoters.get(pollId)
-            ?: ConcurrentHashMap<String, Long>().also { pollVoters.put(pollId, it) }
-        val prevTimestamp = voters[event.pubkey]
-        if (prevTimestamp != null && event.created_at <= prevTimestamp) {
+            ?: ConcurrentHashMap<String, Pair<Long, List<String>>>().also { pollVoters.put(pollId, it) }
+        val prev = voters[event.pubkey]
+        if (prev != null && event.created_at <= prev.first) {
             Log.d("POLL", "[addPollVote] SKIP: older vote from ${event.pubkey.take(8)} for poll ${pollId.take(12)}")
             return
         }
@@ -466,7 +466,15 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
         val counts = pollVoteCounts.get(pollId)
             ?: ConcurrentHashMap<String, Int>().also { pollVoteCounts.put(pollId, it) }
 
-        voters[event.pubkey] = event.created_at
+        // Decrement old option counts when a pubkey re-votes
+        if (prev != null) {
+            for (oldOption in prev.second) {
+                val c = counts[oldOption]
+                if (c != null && c > 0) counts[oldOption] = c - 1
+            }
+        }
+
+        voters[event.pubkey] = Pair(event.created_at, optionIds)
         for (optionId in optionIds) {
             counts[optionId] = (counts[optionId] ?: 0) + 1
         }
