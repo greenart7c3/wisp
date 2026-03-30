@@ -115,6 +115,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.animation.animateContentSize
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Schedule
@@ -224,12 +225,12 @@ fun ComposeScreen(
                             modifier = Modifier.padding(end = 8.dp)
                         ) {
                             Icon(
-                                Icons.Outlined.PhotoLibrary,
+                                Icons.AutoMirrored.Outlined.Article,
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text("Gallery", fontWeight = FontWeight.Bold)
+                            Text("Switch to Text")
                         }
                     } else {
                         OutlinedButton(
@@ -242,7 +243,7 @@ fun ComposeScreen(
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text("Gallery")
+                            Text("Switch to Gallery")
                         }
                     }
                 },
