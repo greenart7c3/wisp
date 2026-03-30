@@ -154,6 +154,7 @@ fun ComposeScreen(
     val explicit by viewModel.explicit.collectAsState()
     val hashtags by viewModel.hashtags.collectAsState()
     val powEnabled by viewModel.powEnabled.collectAsState()
+    val galleryMode by viewModel.galleryMode.collectAsState()
     val pollEnabled by viewModel.pollEnabled.collectAsState()
     val pollOptions by viewModel.pollOptions.collectAsState()
     val pollType by viewModel.pollType.collectAsState()
@@ -444,6 +445,15 @@ fun ComposeScreen(
                             Icons.Outlined.Shield,
                             contentDescription = "Proof of Work",
                             tint = if (powEnabled) WispThemeColors.zapColor
+                                   else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    IconButton(onClick = { viewModel.toggleGalleryMode() }) {
+                        Icon(
+                            Icons.Outlined.Image,
+                            contentDescription = stringResource(R.string.profile_tab_gallery),
+                            tint = if (galleryMode) MaterialTheme.colorScheme.primary
                                    else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }

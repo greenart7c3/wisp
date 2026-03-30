@@ -81,6 +81,8 @@ import com.wisp.app.nostr.NostrEvent
 import com.wisp.app.R
 import com.wisp.app.ui.component.NoteActions
 import com.wisp.app.ui.component.EmojiLibrarySheet
+import com.wisp.app.ui.component.GalleryCard
+import com.wisp.app.ui.component.isGalleryEvent
 import com.wisp.app.ui.component.PostCard
 import com.wisp.app.ui.component.ProfilePicture
 import com.wisp.app.ui.component.RelayIcon
@@ -97,6 +99,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import com.wisp.app.nostr.RelaySet
 import com.wisp.app.relay.BroadcastState
+import com.wisp.app.viewmodel.FeedContentFilter
 import com.wisp.app.viewmodel.FeedType
 import com.wisp.app.viewmodel.FeedViewModel
 import com.wisp.app.viewmodel.InitLoadingState
@@ -941,6 +944,35 @@ fun FeedScreen(
                     onModeChange = { viewModel.setTrendingMode(it) }
                 )
             }
+            // Content type filter chips
+            if (feedType == FeedType.FOLLOWS || feedType == FeedType.EXTENDED_FOLLOWS) {
+                val contentFilter by viewModel.feedContentFilter.collectAsState()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = contentFilter == FeedContentFilter.ALL,
+                        onClick = { viewModel.setFeedContentFilter(FeedContentFilter.ALL) },
+                        label = { Text(stringResource(R.string.filter_all)) },
+                        colors = FilterChipDefaults.filterChipColors()
+                    )
+                    FilterChip(
+                        selected = contentFilter == FeedContentFilter.TEXT_ONLY,
+                        onClick = { viewModel.setFeedContentFilter(FeedContentFilter.TEXT_ONLY) },
+                        label = { Text(stringResource(R.string.tab_notes)) },
+                        colors = FilterChipDefaults.filterChipColors()
+                    )
+                    FilterChip(
+                        selected = contentFilter == FeedContentFilter.GALLERY_ONLY,
+                        onClick = { viewModel.setFeedContentFilter(FeedContentFilter.GALLERY_ONLY) },
+                        label = { Text(stringResource(R.string.profile_tab_gallery)) },
+                        colors = FilterChipDefaults.filterChipColors()
+                    )
+                }
+            }
             Box(
                 modifier = Modifier.fillMaxSize()
             ) {
@@ -1242,62 +1274,108 @@ private fun FeedItem(
     val userPollVotes = remember(pollVoteVersion, event.id) {
         if (event.kind == 1068) viewModel.eventRepo.getUserPollVotes(event.id) else emptyList()
     }
-    PostCard(
-        event = event,
-        profile = profileData,
-        onReply = onReply,
-        onProfileClick = onProfileClick,
-        onNavigateToProfile = onNavigateToProfile,
-        onNoteClick = onNoteClick,
-        onReact = onReact,
-        userReactionEmojis = userEmojis,
-        onRepost = onRepost,
-        onQuote = onQuote,
-        hasUserReposted = hasUserReposted,
-        repostCount = repostCount,
-        onZap = onZap,
-        hasUserZapped = hasUserZapped,
-        likeCount = likeCount,
-        replyCount = replyCount,
-        zapSats = zapSats,
-        isZapAnimating = isZapAnimating,
-        isZapInProgress = isZapInProgress,
-        eventRepo = viewModel.eventRepo,
-        relayIcons = relayIcons,
-        repostPubkeys = repostPubkeys,
-        repostTime = repostTime,
-        reactionDetails = reactionDetails,
-        zapDetails = zapDetails,
-        repostDetails = repostPubkeys,
-        onNavigateToProfileFromDetails = onNavigateToProfile,
-        onRelayClick = onRelayClick,
-        onFollowAuthor = { viewModel.toggleFollow(event.pubkey) },
-        onBlockAuthor = { viewModel.blockUser(event.pubkey) },
-        onMuteThread = {
-            val rootId = Nip10.getRootId(event) ?: Nip10.getReplyTarget(event) ?: event.id
-            viewModel.muteThread(rootId)
-        },
-        isFollowingAuthor = isFollowing,
-        isOwnEvent = event.pubkey == userPubkey,
-        nip05Repo = viewModel.nip05Repo,
-        onAddToList = onAddToList,
-        isInList = isInList,
-        onPin = onPin,
-        isPinned = isPinned,
-        onDelete = onDelete,
-        onQuotedNoteClick = onQuotedNoteClick,
-        noteActions = noteActions,
-        reactionEmojiUrls = eventReactionEmojiUrls,
-        resolvedEmojis = resolvedEmojis,
-        unicodeEmojis = unicodeEmojis,
-        onOpenEmojiLibrary = onOpenEmojiLibrary,
-        pollVoteCounts = pollVoteCounts,
-        pollTotalVotes = pollTotalVotes,
-        userPollVotes = userPollVotes,
-        onPollVote = onPollVote,
-        translationState = translationState,
-        onTranslate = { viewModel.translateEvent(event.id, event.content) }
-    )
+    if (isGalleryEvent(event)) {
+        GalleryCard(
+            event = event,
+            profile = profileData,
+            onReply = onReply,
+            onProfileClick = onProfileClick,
+            onNavigateToProfile = onNavigateToProfile,
+            onNoteClick = onNoteClick,
+            onReact = onReact,
+            userReactionEmojis = userEmojis,
+            onRepost = onRepost,
+            onQuote = onQuote,
+            hasUserReposted = hasUserReposted,
+            repostCount = repostCount,
+            onZap = onZap,
+            hasUserZapped = hasUserZapped,
+            likeCount = likeCount,
+            replyCount = replyCount,
+            zapSats = zapSats,
+            isZapAnimating = isZapAnimating,
+            isZapInProgress = isZapInProgress,
+            eventRepo = viewModel.eventRepo,
+            relayIcons = relayIcons,
+            repostPubkeys = repostPubkeys,
+            reactionDetails = reactionDetails,
+            zapDetails = zapDetails,
+            repostDetails = repostPubkeys,
+            onNavigateToProfileFromDetails = onNavigateToProfile,
+            onFollowAuthor = { viewModel.toggleFollow(event.pubkey) },
+            onBlockAuthor = { viewModel.blockUser(event.pubkey) },
+            isFollowingAuthor = isFollowing,
+            isOwnEvent = event.pubkey == userPubkey,
+            onQuotedNoteClick = onQuotedNoteClick,
+            noteActions = noteActions,
+            reactionEmojiUrls = eventReactionEmojiUrls,
+            resolvedEmojis = resolvedEmojis,
+            unicodeEmojis = unicodeEmojis,
+            onOpenEmojiLibrary = onOpenEmojiLibrary,
+            onAddToList = onAddToList,
+            isInList = isInList,
+            onPin = onPin,
+            isPinned = isPinned,
+            onDelete = onDelete
+        )
+    } else {
+        PostCard(
+            event = event,
+            profile = profileData,
+            onReply = onReply,
+            onProfileClick = onProfileClick,
+            onNavigateToProfile = onNavigateToProfile,
+            onNoteClick = onNoteClick,
+            onReact = onReact,
+            userReactionEmojis = userEmojis,
+            onRepost = onRepost,
+            onQuote = onQuote,
+            hasUserReposted = hasUserReposted,
+            repostCount = repostCount,
+            onZap = onZap,
+            hasUserZapped = hasUserZapped,
+            likeCount = likeCount,
+            replyCount = replyCount,
+            zapSats = zapSats,
+            isZapAnimating = isZapAnimating,
+            isZapInProgress = isZapInProgress,
+            eventRepo = viewModel.eventRepo,
+            relayIcons = relayIcons,
+            repostPubkeys = repostPubkeys,
+            repostTime = repostTime,
+            reactionDetails = reactionDetails,
+            zapDetails = zapDetails,
+            repostDetails = repostPubkeys,
+            onNavigateToProfileFromDetails = onNavigateToProfile,
+            onRelayClick = onRelayClick,
+            onFollowAuthor = { viewModel.toggleFollow(event.pubkey) },
+            onBlockAuthor = { viewModel.blockUser(event.pubkey) },
+            onMuteThread = {
+                val rootId = Nip10.getRootId(event) ?: Nip10.getReplyTarget(event) ?: event.id
+                viewModel.muteThread(rootId)
+            },
+            isFollowingAuthor = isFollowing,
+            isOwnEvent = event.pubkey == userPubkey,
+            nip05Repo = viewModel.nip05Repo,
+            onAddToList = onAddToList,
+            isInList = isInList,
+            onPin = onPin,
+            isPinned = isPinned,
+            onDelete = onDelete,
+            onQuotedNoteClick = onQuotedNoteClick,
+            noteActions = noteActions,
+            reactionEmojiUrls = eventReactionEmojiUrls,
+            resolvedEmojis = resolvedEmojis,
+            unicodeEmojis = unicodeEmojis,
+            onOpenEmojiLibrary = onOpenEmojiLibrary,
+            pollVoteCounts = pollVoteCounts,
+            pollTotalVotes = pollTotalVotes,
+            userPollVotes = userPollVotes,
+            onPollVote = onPollVote,
+            translationState = translationState,
+            onTranslate = { viewModel.translateEvent(event.id, event.content) }
+        )
+    }
 }
 
 @Composable

@@ -15,6 +15,8 @@ import com.wisp.app.nostr.Nip10
 import com.wisp.app.nostr.Nip18
 import com.wisp.app.nostr.Nip19
 import com.wisp.app.nostr.Nip37
+import com.wisp.app.nostr.Nip68
+import com.wisp.app.nostr.Nip71
 import com.wisp.app.nostr.Nip88
 import com.wisp.app.nostr.NostrEvent
 import com.wisp.app.nostr.NostrSigner
@@ -102,6 +104,14 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         powPrefs.setNotePowEnabled(newValue)
     }
 
+    private val _galleryMode = MutableStateFlow(false)
+    val galleryMode: StateFlow<Boolean> = _galleryMode
+
+    fun toggleGalleryMode() {
+        _galleryMode.value = !_galleryMode.value
+        if (_galleryMode.value) _pollEnabled.value = false
+    }
+
     private val _pollEnabled = MutableStateFlow(false)
     val pollEnabled: StateFlow<Boolean> = _pollEnabled
 
@@ -132,6 +142,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
 
     fun togglePoll() {
         _pollEnabled.value = !_pollEnabled.value
+        if (_pollEnabled.value) _galleryMode.value = false
     }
 
     fun updatePollOption(index: Int, text: String) {
@@ -456,7 +467,33 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
 
         // Build poll tags if poll is enabled
         val eventKind: Int
-        if (_pollEnabled.value) {
+        if (_galleryMode.value) {
+            val urls = _uploadedUrls.value
+            if (urls.isEmpty()) {
+                _error.value = "Gallery post requires at least one uploaded image or video"
+                _publishing.value = false
+                return 0
+            }
+            // Detect if media is video or image based on URL extension
+            val videoExts = setOf("mp4", "webm", "mov", "avi", "mkv", "m4v")
+            val isVideo = urls.any { url ->
+                val ext = url.substringAfterLast('.').lowercase().substringBefore('?')
+                ext in videoExts
+            }
+            if (isVideo) {
+                val videoMeta = urls.map { url ->
+                    Nip71.VideoMeta(url = url)
+                }
+                tags.addAll(Nip71.buildVideoTags(title = null, media = videoMeta, hashtags = _hashtags.value))
+                eventKind = Nip71.KIND_VIDEO_HORIZONTAL
+            } else {
+                val imetaEntries = urls.map { url ->
+                    Nip68.ImetaEntry(url = url)
+                }
+                tags.addAll(Nip68.buildPictureTags(title = null, media = imetaEntries, hashtags = _hashtags.value))
+                eventKind = Nip68.KIND_PICTURE
+            }
+        } else if (_pollEnabled.value) {
             val nonBlankOptions = _pollOptions.value
                 .mapIndexed { i, label -> Nip88.PollOption(i.toString(), label.trim()) }
                 .filter { it.label.isNotBlank() }
@@ -684,6 +721,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         _explicit.value = false
         _hashtags.value = emptyList()
         _powEnabled.value = false
+        _galleryMode.value = false
         _pollEnabled.value = false
         _pollOptions.value = listOf("", "")
         _pollType.value = Nip88.PollType.SINGLECHOICE
