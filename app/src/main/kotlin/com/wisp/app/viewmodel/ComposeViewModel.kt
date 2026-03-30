@@ -107,6 +107,14 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     private val _galleryMode = MutableStateFlow(false)
     val galleryMode: StateFlow<Boolean> = _galleryMode
 
+    /** Tracks whether the current gallery upload contains a video (to prevent mixing). */
+    private val _galleryHasVideo = MutableStateFlow(false)
+
+    companion object {
+        val SCHEDULER_RELAYS = listOf("wss://scheduler.nostrarchives.com")
+        const val MAX_GALLERY_IMAGES = 21
+    }
+
     fun toggleGalleryMode() {
         _galleryMode.value = !_galleryMode.value
         if (_galleryMode.value) _pollEnabled.value = false
@@ -134,10 +142,6 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
 
     fun setScheduleTimestamp(epochSeconds: Long) {
         _scheduleTimestamp.value = epochSeconds
-    }
-
-    companion object {
-        val SCHEDULER_RELAYS = listOf("wss://scheduler.nostrarchives.com")
     }
 
     fun togglePoll() {
@@ -197,11 +201,36 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         viewModelScope.launch {
             val total = uris.size
             for ((index, uri) in uris.withIndex()) {
+                // Gallery mode limits: 1 video max, 21 images max, no mixing
+                if (_galleryMode.value) {
+                    val mime = contentResolver.getType(uri) ?: ""
+                    val isVideo = mime.startsWith("video/")
+                    val currentUrls = _uploadedUrls.value
+                    if (isVideo && currentUrls.isNotEmpty()) {
+                        _error.value = "Video gallery posts can only contain one video"
+                        break
+                    }
+                    if (isVideo && total > 1) {
+                        _error.value = "Video gallery posts can only contain one video"
+                        break
+                    }
+                    if (!isVideo && _galleryHasVideo.value) {
+                        _error.value = "Cannot mix images and videos in a gallery post"
+                        break
+                    }
+                    if (!isVideo && currentUrls.size >= MAX_GALLERY_IMAGES) {
+                        _error.value = "Gallery posts can contain up to $MAX_GALLERY_IMAGES images"
+                        break
+                    }
+                }
                 try {
                     _uploadProgress.value = if (total > 1) "Uploading ${index + 1}/$total..." else "Uploading..."
                     val (bytes, mime, ext) = readFileFromUri(contentResolver, uri)
                     val url = blossomRepo.uploadMedia(bytes, mime, ext, signer)
                     _uploadedUrls.value = _uploadedUrls.value + url
+                    if (_galleryMode.value && mime.startsWith("video/")) {
+                        _galleryHasVideo.value = true
+                    }
                     // In gallery mode, don't insert URLs into the text — they're shown in the pager
                     if (!_galleryMode.value) {
                         val current = _content.value.text
@@ -220,10 +249,14 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
 
     fun removeMediaUrl(url: String) {
         _uploadedUrls.value = _uploadedUrls.value - url
-        val current = _content.value.text
-        val newText = current.replace(url, "").replace("\n\n", "\n").trim()
-        _content.value = TextFieldValue(newText, TextRange(newText.length))
-        savedStateHandle["draft_content"] = newText
+        // Reset video flag if all media removed
+        if (_uploadedUrls.value.isEmpty()) _galleryHasVideo.value = false
+        if (!_galleryMode.value) {
+            val current = _content.value.text
+            val newText = current.replace(url, "").replace("\n\n", "\n").trim()
+            _content.value = TextFieldValue(newText, TextRange(newText.length))
+            savedStateHandle["draft_content"] = newText
+        }
     }
 
     fun updateContent(value: TextFieldValue) {
@@ -731,6 +764,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         _hashtags.value = emptyList()
         _powEnabled.value = false
         _galleryMode.value = false
+        _galleryHasVideo.value = false
         _pollEnabled.value = false
         _pollOptions.value = listOf("", "")
         _pollType.value = Nip88.PollType.SINGLECHOICE
