@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import com.wisp.app.nostr.ClientMessage
 import com.wisp.app.nostr.Keys
 import com.wisp.app.nostr.Nip10
+import com.wisp.app.nostr.Nip30
 import com.wisp.app.nostr.Nip18
 import com.wisp.app.nostr.Nip19
 import com.wisp.app.nostr.Nip37
@@ -385,7 +386,8 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         outboxRouter: OutboxRouter? = null,
         signer: NostrSigner? = null,
         onNotePublished: (() -> Unit)? = null,
-        powManager: PowManager? = null
+        powManager: PowManager? = null,
+        resolvedEmojis: Map<String, String> = emptyMap()
     ) {
         val text = _content.value.text.trim()
 
@@ -418,7 +420,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         }
 
         _publishing.value = true
-        startCountdown(text, s, relayPool, replyTo, quoteTo, outboxRouter, onSuccess, onNotePublished, powManager)
+        startCountdown(text, s, relayPool, replyTo, quoteTo, outboxRouter, onSuccess, onNotePublished, powManager, resolvedEmojis)
     }
 
     private fun startCountdown(
@@ -430,13 +432,14 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         outboxRouter: OutboxRouter?,
         onSuccess: () -> Unit,
         onNotePublished: (() -> Unit)? = null,
-        powManager: PowManager? = null
+        powManager: PowManager? = null,
+        resolvedEmojis: Map<String, String> = emptyMap()
     ) {
         countdownJob?.cancel()
         pendingPublish = {
             viewModelScope.launch {
                 try {
-                    val sentCount = publishNote(content, signer, relayPool, replyTo, quoteTo, outboxRouter, powManager)
+                    val sentCount = publishNote(content, signer, relayPool, replyTo, quoteTo, outboxRouter, powManager, resolvedEmojis)
                     if (sentCount == 0) return@launch
                     onNotePublished?.invoke()
                     onSuccess()
@@ -482,7 +485,8 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         replyTo: NostrEvent?,
         quoteTo: NostrEvent? = null,
         outboxRouter: OutboxRouter? = null,
-        powManager: PowManager? = null
+        powManager: PowManager? = null,
+        resolvedEmojis: Map<String, String> = emptyMap()
     ): Int {
         val tags = mutableListOf<List<String>>()
         if (_explicit.value) {
@@ -559,6 +563,15 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             eventKind = Nip88.KIND_POLL
         } else {
             eventKind = 1
+        }
+
+        // Add emoji tags for any :shortcode: references in the content
+        if (resolvedEmojis.isNotEmpty()) {
+            for (match in Nip30.shortcodeRegex.findAll(content)) {
+                val shortcode = match.groupValues[1]
+                val url = resolvedEmojis[shortcode] ?: continue
+                tags.add(listOf("emoji", shortcode, url))
+            }
         }
 
         if (interfacePrefs.isClientTagEnabled()) {

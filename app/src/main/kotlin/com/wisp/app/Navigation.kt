@@ -914,7 +914,8 @@ fun WispNavHost(
                 signer = activeSigner,
                 onNotePublished = { feedViewModel.refreshNotifRepliesEtag() },
                 powManager = feedViewModel.powManager,
-                powPrefs = feedViewModel.powPrefs
+                powPrefs = feedViewModel.powPrefs,
+                resolvedEmojis = feedViewModel.customEmojiRepo.resolvedEmojis.collectAsState().value
             )
         }
 

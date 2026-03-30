@@ -389,7 +389,7 @@ fun CustomEmojiScreen(
                 Column {
                     OutlinedTextField(
                         value = shortcode,
-                        onValueChange = { shortcode = it.replace(Regex("[^a-zA-Z0-9_]"), "") },
+                        onValueChange = { shortcode = it.replace(Regex("[^a-zA-Z0-9_-]"), "") },
                         placeholder = { Text("Shortcode (e.g. pepe)") },
                         singleLine = true
                     )
@@ -616,7 +616,7 @@ private fun EditEmojiSetDialog(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = shortcode,
-                        onValueChange = { shortcode = it.replace(Regex("[^a-zA-Z0-9_]"), "") },
+                        onValueChange = { shortcode = it.replace(Regex("[^a-zA-Z0-9_-]"), "") },
                         placeholder = { Text("shortcode") },
                         singleLine = true,
                         modifier = Modifier.weight(1f)

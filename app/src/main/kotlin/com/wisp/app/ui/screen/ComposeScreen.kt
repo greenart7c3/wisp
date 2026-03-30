@@ -150,7 +150,8 @@ fun ComposeScreen(
     signer: com.wisp.app.nostr.NostrSigner? = null,
     onNotePublished: (() -> Unit)? = null,
     powManager: PowManager? = null,
-    powPrefs: PowPreferences? = null
+    powPrefs: PowPreferences? = null,
+    resolvedEmojis: Map<String, String> = emptyMap()
 ) {
     val content by viewModel.content.collectAsState()
     val publishing by viewModel.publishing.collectAsState()
@@ -1067,7 +1068,8 @@ fun ComposeScreen(
                                 outboxRouter = outboxRouter,
                                 signer = signer,
                                 onNotePublished = onNotePublished,
-                                powManager = powManager
+                                powManager = powManager,
+                                resolvedEmojis = resolvedEmojis
                             )
                         },
                         enabled = !publishing && !isMiningBusy,

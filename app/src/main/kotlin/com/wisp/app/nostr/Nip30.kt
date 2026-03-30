@@ -19,7 +19,7 @@ data class UserEmojiList(
 object Nip30 {
     const val KIND_EMOJI_SET = 30030
     const val KIND_USER_EMOJI_LIST = 10030
-    val shortcodeRegex = Regex(""":([a-zA-Z0-9_]+):""")
+    val shortcodeRegex = Regex(""":([a-zA-Z0-9_-]+):""")
 
     fun parseEmojiTags(event: NostrEvent): Map<String, String> {
         val map = mutableMapOf<String, String>()
