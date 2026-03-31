@@ -115,6 +115,13 @@ import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.heightIn
+import com.wisp.app.nostr.Nip19
+import com.wisp.app.repo.MentionCandidate
 import com.wisp.app.ui.component.ProfilePicture
 import com.wisp.app.ui.theme.WispThemeColors
 import com.wisp.app.viewmodel.NotificationFilter
@@ -188,6 +195,20 @@ fun NotificationsScreen(
 
     // Track inline DM replies sent by user: peerPubkey -> list of sent content strings
     var inlineDmReplies by remember { mutableStateOf(mapOf<String, List<String>>()) }
+
+    // Mention autocomplete state
+    val mentionQuery by viewModel.mentionQuery.collectAsState()
+    val mentionCandidates by viewModel.mentionCandidates.collectAsState()
+    val resolveDisplayName: (String) -> String? = remember(eventRepo) {
+        { bech32 ->
+            try {
+                val data = Nip19.decodeNostrUri("nostr:$bech32")
+                if (data is com.wisp.app.nostr.NostrUriData.ProfileRef) {
+                    eventRepo?.getProfileData(data.pubkey)?.displayString
+                } else null
+            } catch (_: Exception) { null }
+        }
+    }
 
     // Version flows for PostCard cache invalidation
     val reactionVersion = eventRepo?.reactionVersion?.collectAsState()?.value ?: 0
@@ -422,7 +443,13 @@ fun NotificationsScreen(
                                 val offset = (itemHeight - visibleHeight * 3 / 5).coerceAtLeast(0)
                                 listState.animateScrollToItem(index = itemIndex, scrollOffset = offset)
                             }
-                        }
+                        },
+                        mentionQuery = mentionQuery,
+                        mentionCandidates = mentionCandidates,
+                        onMentionDetect = { tfv -> viewModel.detectMentionQuery(tfv) },
+                        onMentionSelect = { candidate, text, cursor -> viewModel.selectMention(candidate, text, cursor) },
+                        onMentionClear = { viewModel.clearMentionState() },
+                        resolveDisplayName = resolveDisplayName
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline, thickness = 0.5.dp)
                 }
@@ -454,7 +481,13 @@ private fun ZenNotificationRow(
     onDmZap: (String, String, String) -> Unit = { _, _, _ -> },
     dmZapSats: (String) -> Long = { 0L },
     onUploadMedia: (List<Uri>, onUrl: (String) -> Unit) -> Unit = { _, _ -> },
-    onReplyFocused: () -> Unit = {}
+    onReplyFocused: () -> Unit = {},
+    mentionQuery: String? = null,
+    mentionCandidates: List<MentionCandidate> = emptyList(),
+    onMentionDetect: ((TextFieldValue) -> Unit)? = null,
+    onMentionSelect: ((MentionCandidate, String, Int) -> TextFieldValue)? = null,
+    onMentionClear: (() -> Unit)? = null,
+    resolveDisplayName: ((String) -> String?)? = null
 ) {
     val profile = remember(profileVersion, item.actorPubkey) { resolveProfile(item.actorPubkey) }
     val displayName = profile?.displayString
@@ -550,7 +583,13 @@ private fun ZenNotificationRow(
                     onDmZap = onDmZap,
                     isDmZapInProgress = postCardParams?.isZapInProgress?.invoke(item.actorPubkey) ?: false,
                     isDmZapAnimating = postCardParams?.isZapAnimating?.invoke(item.actorPubkey) ?: false,
-                    dmZapSats = dmZapSats(item.actorPubkey)
+                    dmZapSats = dmZapSats(item.actorPubkey),
+                    mentionQuery = mentionQuery,
+                    mentionCandidates = mentionCandidates,
+                    onMentionDetect = onMentionDetect,
+                    onMentionSelect = onMentionSelect,
+                    onMentionClear = onMentionClear,
+                    resolveDisplayName = resolveDisplayName
                 )
             } else if (item.type == NotificationType.REPLY) {
                 ReplyExpansion(
@@ -565,7 +604,13 @@ private fun ZenNotificationRow(
                     onSendReply = onSendReply,
                     onUploadMedia = onUploadMedia,
                     onReplyFocused = onReplyFocused,
-                    resolvedEmojis = resolvedEmojis
+                    resolvedEmojis = resolvedEmojis,
+                    mentionQuery = mentionQuery,
+                    mentionCandidates = mentionCandidates,
+                    onMentionDetect = onMentionDetect,
+                    onMentionSelect = onMentionSelect,
+                    onMentionClear = onMentionClear,
+                    resolveDisplayName = resolveDisplayName
                 )
             } else if (item.type == NotificationType.DM_ZAP || item.type == NotificationType.PROFILE_ZAP) {
                 ZapMessageExpansion(item = item)
@@ -643,7 +688,13 @@ private fun DmExpansion(
     onDmZap: (peerPubkey: String, rumorId: String, senderPubkey: String) -> Unit = { _, _, _ -> },
     isDmZapInProgress: Boolean = false,
     isDmZapAnimating: Boolean = false,
-    dmZapSats: Long = 0L
+    dmZapSats: Long = 0L,
+    mentionQuery: String? = null,
+    mentionCandidates: List<MentionCandidate> = emptyList(),
+    onMentionDetect: ((TextFieldValue) -> Unit)? = null,
+    onMentionSelect: ((MentionCandidate, String, Int) -> TextFieldValue)? = null,
+    onMentionClear: (() -> Unit)? = null,
+    resolveDisplayName: ((String) -> String?)? = null
 ) {
     val peerPubkey = item.dmPeerPubkey ?: return
     val rumorId = item.dmRumorId ?: ""
@@ -756,6 +807,12 @@ private fun DmExpansion(
             onFocused = onFocused,
             placeholder = stringResource(R.string.placeholder_message),
             resolvedEmojis = resolvedEmojis,
+            mentionQuery = mentionQuery,
+            mentionCandidates = mentionCandidates,
+            onMentionDetect = onMentionDetect,
+            onMentionSelect = onMentionSelect,
+            onMentionClear = onMentionClear,
+            resolveDisplayName = resolveDisplayName,
             modifier = Modifier.padding(start = 48.dp, top = 8.dp, end = 16.dp, bottom = 4.dp)
         )
 
@@ -788,7 +845,13 @@ private fun ReplyExpansion(
     onSendReply: (NostrEvent, String) -> Unit,
     onUploadMedia: (List<Uri>, onUrl: (String) -> Unit) -> Unit = { _, _ -> },
     onReplyFocused: () -> Unit = {},
-    resolvedEmojis: Map<String, String> = emptyMap()
+    resolvedEmojis: Map<String, String> = emptyMap(),
+    mentionQuery: String? = null,
+    mentionCandidates: List<MentionCandidate> = emptyList(),
+    onMentionDetect: ((TextFieldValue) -> Unit)? = null,
+    onMentionSelect: ((MentionCandidate, String, Int) -> TextFieldValue)? = null,
+    onMentionClear: (() -> Unit)? = null,
+    resolveDisplayName: ((String) -> String?)? = null
 ) {
     val replyEvent = remember(item.replyEventId) { item.replyEventId?.let { eventRepo?.getEvent(it) } }
 
@@ -854,6 +917,12 @@ private fun ReplyExpansion(
                 onFocused = onReplyFocused,
                 placeholder = stringResource(R.string.reply_placeholder),
                 resolvedEmojis = resolvedEmojis,
+                mentionQuery = mentionQuery,
+                mentionCandidates = mentionCandidates,
+                onMentionDetect = onMentionDetect,
+                onMentionSelect = onMentionSelect,
+                onMentionClear = onMentionClear,
+                resolveDisplayName = resolveDisplayName,
                 modifier = Modifier.padding(start = 48.dp, top = 8.dp, end = 16.dp, bottom = 4.dp)
             )
         }
@@ -1211,17 +1280,25 @@ private fun InlineReplyComposer(
     onFocused: () -> Unit = {},
     placeholder: String = "Reply...",
     resolvedEmojis: Map<String, String> = emptyMap(),
+    mentionQuery: String? = null,
+    mentionCandidates: List<MentionCandidate> = emptyList(),
+    onMentionDetect: ((TextFieldValue) -> Unit)? = null,
+    onMentionSelect: ((MentionCandidate, String, Int) -> TextFieldValue)? = null,
+    onMentionClear: (() -> Unit)? = null,
+    resolveDisplayName: ((String) -> String?)? = null,
     modifier: Modifier = Modifier
 ) {
     val textFieldState = remember { TextFieldState() }
 
-    // TextFieldValue mirror for cursor-aware emoji autocomplete
+    // TextFieldValue mirror for cursor-aware emoji/mention autocomplete
     var replyTfv by remember { mutableStateOf(TextFieldValue()) }
     LaunchedEffect(textFieldState) {
         snapshotFlow {
             textFieldState.text.toString() to textFieldState.selection
         }.collect { (text, selection) ->
-            replyTfv = TextFieldValue(text, selection)
+            val tfv = TextFieldValue(text, selection)
+            replyTfv = tfv
+            onMentionDetect?.invoke(tfv)
         }
     }
 
@@ -1240,9 +1317,48 @@ private fun InlineReplyComposer(
     }
 
     Column(modifier = modifier) {
+        // Mention autocomplete dropdown
+        if (onMentionSelect != null) {
+            AnimatedVisibility(
+                visible = mentionQuery != null && mentionCandidates.isNotEmpty(),
+                enter = fadeIn() + slideInVertically(),
+                exit = fadeOut() + slideOutVertically()
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    tonalElevation = 3.dp,
+                    shadowElevation = 2.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 200.dp)
+                        .padding(bottom = 4.dp)
+                ) {
+                    LazyColumn {
+                        items(mentionCandidates, key = { it.profile.pubkey }) { candidate ->
+                            MentionCandidateRow(
+                                candidate = candidate,
+                                onClick = {
+                                    val result = onMentionSelect(
+                                        candidate,
+                                        textFieldState.text.toString(),
+                                        textFieldState.selection.start
+                                    )
+                                    textFieldState.edit {
+                                        replace(0, length, result.text)
+                                        selection = result.selection
+                                    }
+                                    replyTfv = result
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Emoji shortcode autocomplete
         val replyEmojiState = remember(replyTfv) { detectEmojiAutocomplete(replyTfv) }
-        if (replyEmojiState != null) {
+        if (replyEmojiState != null && mentionQuery == null) {
             EmojiShortcodePopup(
                 query = replyEmojiState.query,
                 resolvedEmojis = resolvedEmojis,
@@ -1311,9 +1427,9 @@ private fun InlineReplyComposer(
                 }
             })
         }
-        val replyEmojiTransformation = remember(resolvedEmojis) {
+        val replyOutputTransformation = remember(resolvedEmojis, resolveDisplayName) {
             com.wisp.app.ui.component.MentionOutputTransformation(
-                resolveDisplayName = { null },
+                resolveDisplayName = resolveDisplayName ?: { null },
                 resolvedEmojis = resolvedEmojis
             )
         }
@@ -1321,7 +1437,7 @@ private fun InlineReplyComposer(
             state = textFieldState,
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             modifier = fieldModifier,
-            outputTransformation = replyEmojiTransformation,
+            outputTransformation = replyOutputTransformation,
             lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
             keyboardOptions = KeyboardOptions(
                 capitalization = KeyboardCapitalization.Sentences
@@ -1352,6 +1468,7 @@ private fun InlineReplyComposer(
                     if (trimmed.isNotEmpty()) {
                         onSend(trimmed)
                         textFieldState.edit { replace(0, length, "") }
+                        onMentionClear?.invoke()
                     }
                 },
             contentAlignment = Alignment.Center
@@ -1364,6 +1481,45 @@ private fun InlineReplyComposer(
             )
         }
     }
+    }
+}
+
+@Composable
+private fun MentionCandidateRow(
+    candidate: MentionCandidate,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ProfilePicture(
+            url = candidate.profile.picture,
+            size = 32,
+            showFollowBadge = candidate.isContact
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = candidate.profile.displayString,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                maxLines = 1
+            )
+            val subtitle = candidate.profile.name?.let { "@$it" }
+                ?: candidate.profile.nip05
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
+        }
     }
 }
 
