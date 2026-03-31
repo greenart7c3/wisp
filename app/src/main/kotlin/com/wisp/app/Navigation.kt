@@ -1209,6 +1209,12 @@ fun WispNavHost(
                 onRepost = { event ->
                     feedViewModel.sendRepost(event)
                 },
+                onQuote = { event ->
+                    quoteTarget = event
+                    replyTarget = null
+                    composeViewModel.clear()
+                    navController.navigate(Routes.COMPOSE)
+                },
                 onZap = { event ->
                     searchZapTarget = event
                 },
