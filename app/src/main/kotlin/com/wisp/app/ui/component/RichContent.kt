@@ -916,7 +916,7 @@ fun QuotedNote(
     val effectiveNoteClick = noteActions?.onNoteClick ?: onNoteClick
 
     if (event != null && noteActions != null) {
-        // Full PostCard rendering with all interactive features
+        // Full rendering with all interactive features
         val reactionVersion by eventRepo.reactionVersion.collectAsState()
         val zapVersion by eventRepo.zapVersion.collectAsState()
         val replyCountVersion by eventRepo.replyCountVersion.collectAsState()
@@ -943,40 +943,77 @@ fun QuotedNote(
                 .fillMaxWidth()
                 .padding(vertical = 6.dp)
         ) {
-            PostCard(
-                event = event,
-                profile = profile,
-                onReply = { noteActions.onReply(event) },
-                onProfileClick = { noteActions.onProfileClick(event.pubkey) },
-                onNavigateToProfile = noteActions.onProfileClick,
-                onNoteClick = { effectiveNoteClick?.invoke(eventId) },
-                onReact = { emoji -> noteActions.onReact(event, emoji) },
-                userReactionEmojis = userEmojis,
-                onRepost = { noteActions.onRepost(event) },
-                onQuote = { noteActions.onQuote(event) },
-                hasUserReposted = hasUserReposted,
-                repostCount = repostCount,
-                onZap = { noteActions.onZap(event) },
-                hasUserZapped = hasUserZapped,
-                likeCount = likeCount,
-                replyCount = replyCount,
-                zapSats = zapSats,
-                eventRepo = eventRepo,
-                reactionDetails = reactionDetails,
-                zapDetails = zapDetails,
-                repostDetails = repostPubkeys,
-                onNavigateToProfileFromDetails = noteActions.onProfileClick,
-                onFollowAuthor = { noteActions.onFollowAuthor(event.pubkey) },
-                onBlockAuthor = { noteActions.onBlockAuthor(event.pubkey) },
-                isFollowingAuthor = noteActions.isFollowing(event.pubkey),
-                isOwnEvent = event.pubkey == noteActions.userPubkey,
-                nip05Repo = noteActions.nip05Repo,
-                onAddToList = { noteActions.onAddToList(eventId) },
-                onPin = { noteActions.onPin(eventId) },
-                onQuotedNoteClick = effectiveNoteClick,
-                noteActions = noteActions,
-                showDivider = false
-            )
+            if (isGalleryEvent(event)) {
+                GalleryCard(
+                    event = event,
+                    profile = profile,
+                    onReply = { noteActions.onReply(event) },
+                    onProfileClick = { noteActions.onProfileClick(event.pubkey) },
+                    onNavigateToProfile = noteActions.onProfileClick,
+                    onNoteClick = { effectiveNoteClick?.invoke(eventId) },
+                    onReact = { emoji -> noteActions.onReact(event, emoji) },
+                    userReactionEmojis = userEmojis,
+                    onRepost = { noteActions.onRepost(event) },
+                    onQuote = { noteActions.onQuote(event) },
+                    hasUserReposted = hasUserReposted,
+                    repostCount = repostCount,
+                    onZap = { noteActions.onZap(event) },
+                    hasUserZapped = hasUserZapped,
+                    likeCount = likeCount,
+                    replyCount = replyCount,
+                    zapSats = zapSats,
+                    eventRepo = eventRepo,
+                    reactionDetails = reactionDetails,
+                    zapDetails = zapDetails,
+                    repostDetails = repostPubkeys,
+                    onNavigateToProfileFromDetails = noteActions.onProfileClick,
+                    onFollowAuthor = { noteActions.onFollowAuthor(event.pubkey) },
+                    onBlockAuthor = { noteActions.onBlockAuthor(event.pubkey) },
+                    isFollowingAuthor = noteActions.isFollowing(event.pubkey),
+                    isOwnEvent = event.pubkey == noteActions.userPubkey,
+                    nip05Repo = noteActions.nip05Repo,
+                    onAddToList = { noteActions.onAddToList(eventId) },
+                    onPin = { noteActions.onPin(eventId) },
+                    onQuotedNoteClick = effectiveNoteClick,
+                    noteActions = noteActions,
+                    showDivider = false
+                )
+            } else {
+                PostCard(
+                    event = event,
+                    profile = profile,
+                    onReply = { noteActions.onReply(event) },
+                    onProfileClick = { noteActions.onProfileClick(event.pubkey) },
+                    onNavigateToProfile = noteActions.onProfileClick,
+                    onNoteClick = { effectiveNoteClick?.invoke(eventId) },
+                    onReact = { emoji -> noteActions.onReact(event, emoji) },
+                    userReactionEmojis = userEmojis,
+                    onRepost = { noteActions.onRepost(event) },
+                    onQuote = { noteActions.onQuote(event) },
+                    hasUserReposted = hasUserReposted,
+                    repostCount = repostCount,
+                    onZap = { noteActions.onZap(event) },
+                    hasUserZapped = hasUserZapped,
+                    likeCount = likeCount,
+                    replyCount = replyCount,
+                    zapSats = zapSats,
+                    eventRepo = eventRepo,
+                    reactionDetails = reactionDetails,
+                    zapDetails = zapDetails,
+                    repostDetails = repostPubkeys,
+                    onNavigateToProfileFromDetails = noteActions.onProfileClick,
+                    onFollowAuthor = { noteActions.onFollowAuthor(event.pubkey) },
+                    onBlockAuthor = { noteActions.onBlockAuthor(event.pubkey) },
+                    isFollowingAuthor = noteActions.isFollowing(event.pubkey),
+                    isOwnEvent = event.pubkey == noteActions.userPubkey,
+                    nip05Repo = noteActions.nip05Repo,
+                    onAddToList = { noteActions.onAddToList(eventId) },
+                    onPin = { noteActions.onPin(eventId) },
+                    onQuotedNoteClick = effectiveNoteClick,
+                    noteActions = noteActions,
+                    showDivider = false
+                )
+            }
         }
     } else if (event != null && isGalleryEvent(event)) {
         // Gallery quote preview — compact card with thumbnail
