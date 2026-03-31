@@ -190,6 +190,11 @@ class EventRouter(
                 val parentId = Nip10.getReplyTarget(event)
                 if (parentId != null) eventRepo.addReplyCount(parentId, event.id)
             }
+        } else if (subscriptionId.startsWith("qpoll-")) {
+            // Poll vote responses for quoted polls
+            if (event.kind == Nip88.KIND_POLL_RESPONSE) {
+                eventRepo.addEvent(event)
+            }
         } else if (subscriptionId.startsWith("quote-")) {
             eventRepo.cacheEvent(event)
             if (event.kind == 1 && eventRepo.getProfileData(event.pubkey) == null) {

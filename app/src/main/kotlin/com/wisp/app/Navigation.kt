@@ -1893,6 +1893,7 @@ fun WispNavHost(
                         navController.navigate("article/$kind/$author/${java.net.URLEncoder.encode(dTag, "UTF-8")}")
                     },
                     onPayInvoice = { bolt11 -> feedViewModel.payInvoice(bolt11) },
+                    onPollVote = { pollId, optionIds -> feedViewModel.publishPollVote(pollId, optionIds) },
                     onGroupRoom = { relayUrl, groupId ->
                         val encoded = android.util.Base64.encodeToString(
                             relayUrl.toByteArray(Charsets.UTF_8),
@@ -2000,6 +2001,7 @@ fun WispNavHost(
                         navController.navigate("article/$kind/$author/${java.net.URLEncoder.encode(dTag, "UTF-8")}")
                     },
                     onPayInvoice = { bolt11 -> feedViewModel.payInvoice(bolt11) },
+                    onPollVote = { pollId, optionIds -> feedViewModel.publishPollVote(pollId, optionIds) },
                     onGroupRoom = { relayUrl, groupId ->
                         val encoded = android.util.Base64.encodeToString(
                             relayUrl.toByteArray(Charsets.UTF_8),
@@ -2154,6 +2156,7 @@ fun WispNavHost(
                         navController.navigate("article/$k/$a/${java.net.URLEncoder.encode(d, "UTF-8")}")
                     },
                     onPayInvoice = { bolt11 -> feedViewModel.payInvoice(bolt11) },
+                    onPollVote = { pollId, optionIds -> feedViewModel.publishPollVote(pollId, optionIds) },
                     onGroupRoom = { relayUrl, groupId ->
                         val encoded = android.util.Base64.encodeToString(
                             relayUrl.toByteArray(Charsets.UTF_8),

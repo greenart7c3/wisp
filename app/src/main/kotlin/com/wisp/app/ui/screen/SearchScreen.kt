@@ -139,6 +139,7 @@ fun SearchScreen(
             onAddEmojiSet = onAddEmojiSet,
             onRemoveEmojiSet = onRemoveEmojiSet,
             isEmojiSetAdded = isEmojiSetAdded,
+            onPollVote = onPollVote,
         )
     }
 

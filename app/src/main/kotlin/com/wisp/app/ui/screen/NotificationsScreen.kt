@@ -986,7 +986,8 @@ private fun ReferencedNotePostCard(
                         fetchGroupPreview = p.fetchGroupPreview,
                         onAddEmojiSet = p.onAddEmojiSet,
                         onRemoveEmojiSet = p.onRemoveEmojiSet,
-                        isEmojiSetAdded = p.isEmojiSetAdded
+                        isEmojiSetAdded = p.isEmojiSetAdded,
+                        onPollVote = p.onPollVote
                     )
                 } else null
             },
@@ -1066,7 +1067,8 @@ private fun ReferencedNotePostCard(
                         fetchGroupPreview = p.fetchGroupPreview,
                         onAddEmojiSet = p.onAddEmojiSet,
                         onRemoveEmojiSet = p.onRemoveEmojiSet,
-                        isEmojiSetAdded = p.isEmojiSetAdded
+                        isEmojiSetAdded = p.isEmojiSetAdded,
+                        onPollVote = p.onPollVote
                     )
                 } else null
             },

@@ -333,7 +333,8 @@ fun FeedScreen(
             isEmojiSetAdded = { pubkey, dTag ->
                 val ref = com.wisp.app.nostr.Nip30.buildSetReference(pubkey, dTag)
                 viewModel.customEmojiRepo.userEmojiList.value?.setReferences?.contains(ref) ?: false
-            }
+            },
+            onPollVote = { pollId, optionIds -> viewModel.publishPollVote(pollId, optionIds) }
         )
     }
 
