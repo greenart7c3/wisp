@@ -40,13 +40,15 @@ object Nip17 {
         val senderPubkeyHex = senderPubkey.toHex()
         val recipientPubkeyHex = recipientPubkey.toHex()
 
-        // Layer 1: Build unsigned rumor (no id, no sig)
+        // Layer 1: Build unsigned rumor (id but no sig)
         val rumorTags = mutableListOf<List<String>>()
         if (rumorKind == 14) rumorTags.add(listOf("p", rumorPTag ?: recipientPubkeyHex))
         rumorTags.addAll(replyTags)
 
         val now = createdAt
+        val rumorId = NostrEvent.computeId(senderPubkeyHex, now, rumorKind, rumorTags, message)
         val rumorJson = buildJsonObject {
+            put("id", JsonPrimitive(rumorId))
             put("kind", JsonPrimitive(rumorKind))
             put("pubkey", JsonPrimitive(senderPubkeyHex))
             put("created_at", JsonPrimitive(now))
@@ -175,13 +177,15 @@ object Nip17 {
     ): NostrEvent {
         val senderPubkeyHex = signer.pubkeyHex
 
-        // Layer 1: Build unsigned rumor (no id, no sig)
+        // Layer 1: Build unsigned rumor (id but no sig)
         val rumorTags = mutableListOf<List<String>>()
         if (rumorKind == 14) rumorTags.add(listOf("p", rumorPTag ?: recipientPubkeyHex))
         rumorTags.addAll(replyTags)
 
         val now = createdAt
+        val rumorId = NostrEvent.computeId(senderPubkeyHex, now, rumorKind, rumorTags, message)
         val rumorJson = buildJsonObject {
+            put("id", JsonPrimitive(rumorId))
             put("kind", JsonPrimitive(rumorKind))
             put("pubkey", JsonPrimitive(senderPubkeyHex))
             put("created_at", JsonPrimitive(now))
