@@ -1317,6 +1317,7 @@ private fun FeedItem(
             relayIcons = relayIcons,
             onRelayClick = onRelayClick,
             repostPubkeys = repostPubkeys,
+            repostTime = repostTime,
             reactionDetails = reactionDetails,
             zapDetails = zapDetails,
             repostDetails = repostPubkeys,

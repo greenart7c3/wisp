@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,6 +39,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -121,6 +123,7 @@ fun GalleryCard(
     relayIcons: List<Pair<String, String?>> = emptyList(),
     onRelayClick: (String) -> Unit = {},
     repostPubkeys: List<String> = emptyList(),
+    repostTime: Long? = null,
     reactionDetails: Map<String, List<String>> = emptyMap(),
     zapDetails: List<ZapDetail> = emptyList(),
     repostDetails: List<String> = emptyList(),
@@ -182,6 +185,7 @@ fun GalleryCard(
             eventRepo = eventRepo,
             relayIcons = relayIcons,
             repostPubkeys = repostPubkeys,
+            repostTime = repostTime,
             reactionDetails = reactionDetails,
             zapDetails = zapDetails,
             repostDetails = repostDetails,
@@ -233,6 +237,69 @@ fun GalleryCard(
             .clickable(onClick = onNoteClick)
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
+        // Repost banner — matches PostCard exactly
+        if (repostPubkeys.isNotEmpty()) {
+            val maxAvatars = 10
+            val displayPubkeys = repostPubkeys.take(maxAvatars)
+            val overflow = repostPubkeys.size - maxAvatars
+            val formattedRepostTime = repostTime?.let { formatGalleryTimestamp(it) }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)
+            ) {
+                Icon(
+                    Icons.Outlined.Repeat,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+
+                // Overlapping avatars
+                Box(modifier = Modifier.height(20.dp).width((displayPubkeys.size * 14 + 6 + 4).dp)) {
+                    displayPubkeys.forEachIndexed { index, pubkey ->
+                        val avatarUrl = eventRepo?.getProfileData(pubkey)?.picture
+                        Box(modifier = Modifier.offset(x = (index * 14).dp)) {
+                            ProfilePicture(
+                                url = avatarUrl,
+                                size = 20,
+                                showFollowBadge = false,
+                                onClick = { onNavigateToProfileFromDetails?.invoke(pubkey) }
+                            )
+                        }
+                    }
+                }
+
+                // Label text
+                val labelText = if (repostPubkeys.size == 1) {
+                    val name = eventRepo?.getProfileData(repostPubkeys.first())?.displayString
+                        ?: (repostPubkeys.first().take(8) + "...")
+                    "$name reposted"
+                } else if (overflow > 0) {
+                    "and $overflow others reposted"
+                } else {
+                    "reposted"
+                }
+                Text(
+                    text = labelText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                if (formattedRepostTime != null) {
+                    Text(
+                        text = " \u00B7 $formattedRepostTime",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+            }
+        }
+
         // Author header — matches PostCard exactly
         Row(verticalAlignment = Alignment.CenterVertically) {
             ProfilePicture(
