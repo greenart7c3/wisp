@@ -8,6 +8,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
@@ -1992,6 +1994,7 @@ internal fun InlineVideoPlayerWithFullscreen(url: String, onFullScreen: (positio
     val isMuted by globalMuted.collectAsState()
     var showControls by remember { mutableStateOf(false) }
     var userPaused by remember { mutableStateOf(false) }
+    var isPlaying by remember { mutableStateOf(false) }
     val exoPlayer = remember(url) {
         HttpClientFactory.createExoPlayer(context).apply {
             setMediaItem(MediaItem.fromUri(Uri.parse(url)))
@@ -2013,8 +2016,9 @@ internal fun InlineVideoPlayerWithFullscreen(url: String, onFullScreen: (positio
                     videoAspectRatio = videoSize.width.toFloat() / videoSize.height.toFloat()
                 }
             }
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (!isPlaying && exoPlayer.playbackState == Player.STATE_READY) {
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+                if (!playing && exoPlayer.playbackState == Player.STATE_READY) {
                     userPaused = true
                 }
             }
@@ -2116,6 +2120,32 @@ internal fun InlineVideoPlayerWithFullscreen(url: String, onFullScreen: (positio
                 }
             }
         }
+        // Play button overlay when video is not playing and autoplay is off
+        if (!mediaSettings.videoAutoPlay && !isPlaying) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable {
+                        activeVideoUrl.value = url
+                        userPaused = false
+                        exoPlayer.play()
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = "Play video",
+                    modifier = Modifier
+                        .size(64.dp)
+                        .background(
+                            color = Color.Black.copy(alpha = 0.5f),
+                            shape = CircleShape
+                        )
+                        .padding(8.dp),
+                    tint = Color.White
+                )
+            }
+        }
     }
 }
 
@@ -2162,6 +2192,7 @@ private fun InlineVideoPlayer(url: String, modifier: Modifier = Modifier) {
     val isMuted by globalMuted.collectAsState()
     var showControls by remember { mutableStateOf(false) }
     var userPaused by remember { mutableStateOf(false) }
+    var isPlaying by remember { mutableStateOf(false) }
     val exoPlayer = remember(url) {
         HttpClientFactory.createExoPlayer(context).apply {
             setMediaItem(MediaItem.fromUri(Uri.parse(url)))
@@ -2182,8 +2213,9 @@ private fun InlineVideoPlayer(url: String, modifier: Modifier = Modifier) {
                     videoAspectRatio = videoSize.width.toFloat() / videoSize.height.toFloat()
                 }
             }
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (!isPlaying && exoPlayer.playbackState == Player.STATE_READY) {
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+                if (!playing && exoPlayer.playbackState == Player.STATE_READY) {
                     userPaused = true
                 }
             }
@@ -2261,6 +2293,32 @@ private fun InlineVideoPlayer(url: String, modifier: Modifier = Modifier) {
                     imageVector = if (isMuted) Icons.AutoMirrored.Filled.VolumeOff
                         else Icons.AutoMirrored.Filled.VolumeUp,
                     contentDescription = if (isMuted) "Unmute" else "Mute"
+                )
+            }
+        }
+        // Play button overlay when video is not playing and autoplay is off
+        if (!mediaSettings.videoAutoPlay && !isPlaying) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable {
+                        activeVideoUrl.value = url
+                        userPaused = false
+                        exoPlayer.play()
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = "Play video",
+                    modifier = Modifier
+                        .size(64.dp)
+                        .background(
+                            color = Color.Black.copy(alpha = 0.5f),
+                            shape = CircleShape
+                        )
+                        .padding(8.dp),
+                    tint = Color.White
                 )
             }
         }
