@@ -1,6 +1,11 @@
 package com.wisp.app.ui.component
 
 import android.content.Intent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.rememberTransformableState
@@ -28,6 +33,8 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -112,6 +119,7 @@ fun GalleryCard(
     isZapInProgress: Boolean = false,
     eventRepo: EventRepository? = null,
     relayIcons: List<Pair<String, String?>> = emptyList(),
+    onRelayClick: (String) -> Unit = {},
     repostPubkeys: List<String> = emptyList(),
     reactionDetails: Map<String, List<String>> = emptyMap(),
     zapDetails: List<ZapDetail> = emptyList(),
@@ -205,6 +213,15 @@ fun GalleryCard(
             ?: event.pubkey.take(8) + "..." + event.pubkey.takeLast(4)
     }
     val timestamp = remember(event.created_at) { formatGalleryTimestamp(event.created_at) }
+
+    val displayIcons = remember(relayIcons) {
+        if (relayIcons.size <= 5) relayIcons else relayIcons.take(5)
+    }
+    val clientName = remember(event.id) {
+        event.tags.firstOrNull { it.size >= 2 && it[0] == "client" }?.get(1)
+    }
+    val hasReactionDetails = reactionDetails.isNotEmpty() || zapDetails.isNotEmpty() || repostDetails.isNotEmpty()
+    var expandedDetails by remember { mutableStateOf(false) }
 
     var fullScreenInitialPage by remember { mutableIntStateOf(-1) }
     var fullScreenVideoUrl by remember { mutableStateOf<String?>(null) }
@@ -500,26 +517,70 @@ fun GalleryCard(
 
         Spacer(Modifier.height(4.dp))
 
-        // Action bar
-        ActionBar(
-            onReply = onReply,
-            onReact = onReact,
-            userReactionEmojis = userReactionEmojis,
-            onRepost = onRepost,
-            onQuote = onQuote,
-            hasUserReposted = hasUserReposted,
-            repostCount = repostCount,
-            onZap = onZap,
-            hasUserZapped = hasUserZapped,
-            likeCount = likeCount,
-            replyCount = replyCount,
-            zapSats = zapSats,
-            isZapAnimating = isZapAnimating,
-            isZapInProgress = isZapInProgress,
-            resolvedEmojis = resolvedEmojis,
-            unicodeEmojis = unicodeEmojis,
-            onOpenEmojiLibrary = onOpenEmojiLibrary
-        )
+        // Action bar with expand/collapse
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ActionBar(
+                onReply = onReply,
+                onReact = onReact,
+                userReactionEmojis = userReactionEmojis,
+                onRepost = onRepost,
+                onQuote = onQuote,
+                hasUserReposted = hasUserReposted,
+                repostCount = repostCount,
+                onZap = onZap,
+                hasUserZapped = hasUserZapped,
+                onAddToList = onAddToList,
+                isInList = isInList,
+                likeCount = likeCount,
+                replyCount = replyCount,
+                zapSats = zapSats,
+                isZapAnimating = isZapAnimating,
+                isZapInProgress = isZapInProgress,
+                reactionEmojiUrls = reactionEmojiUrls,
+                resolvedEmojis = resolvedEmojis,
+                unicodeEmojis = unicodeEmojis,
+                onOpenEmojiLibrary = onOpenEmojiLibrary,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = if (expandedDetails) Icons.Filled.KeyboardArrowUp
+                    else Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expandedDetails) stringResource(R.string.cd_collapse) else stringResource(R.string.cd_expand),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .size(20.dp)
+                    .clickable { expandedDetails = !expandedDetails }
+            )
+        }
+        AnimatedVisibility(
+            visible = expandedDetails,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut()
+        ) {
+            val profileResolver: (String) -> ProfileData? = { pubkey ->
+                eventRepo?.getProfileData(pubkey)
+            }
+            val navToProfile = onNavigateToProfileFromDetails ?: onNavigateToProfile ?: {}
+            Column {
+                if (hasReactionDetails) {
+                    ReactionDetailsSection(
+                        reactionDetails = reactionDetails,
+                        zapDetails = zapDetails,
+                        repostDetails = repostDetails,
+                        resolveProfile = profileResolver,
+                        onProfileClick = navToProfile,
+                        reactionEmojiUrls = reactionEmojiUrls,
+                        eventRepo = eventRepo
+                    )
+                }
+                if (displayIcons.isNotEmpty()) {
+                    SeenOnSection(relayIcons = displayIcons, onRelayClick = onRelayClick)
+                }
+                if (clientName != null) {
+                    ClientTagSection(clientName = clientName)
+                }
+            }
+        }
     }
 
     if (showDivider) {
