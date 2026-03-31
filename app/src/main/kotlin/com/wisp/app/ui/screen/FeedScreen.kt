@@ -1315,6 +1315,7 @@ private fun FeedItem(
             isZapInProgress = isZapInProgress,
             eventRepo = viewModel.eventRepo,
             relayIcons = relayIcons,
+            onRelayClick = onRelayClick,
             repostPubkeys = repostPubkeys,
             reactionDetails = reactionDetails,
             zapDetails = zapDetails,
