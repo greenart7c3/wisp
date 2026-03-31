@@ -386,7 +386,7 @@ fun WispNavHost(
         notificationsViewModel.init(
             feedViewModel.notifRepo, feedViewModel.eventRepo, feedViewModel.contactRepo,
             feedViewModel.dmRepo, feedViewModel.relayPool, feedViewModel.relayListRepo,
-            feedViewModel.powPrefs
+            feedViewModel.powPrefs, feedViewModel.profileRepo, feedViewModel.eventPersistence
         )
     }
 
@@ -2706,6 +2706,7 @@ fun WispNavHost(
             }
 
             val notifReplyScope = rememberCoroutineScope()
+            val notifInterfacePrefs = remember { com.wisp.app.repo.InterfacePreferences(context) }
             var notifZapTarget by remember { mutableStateOf<NostrEvent?>(null) }
             data class NotifDmZapInfo(val peerPubkey: String, val rumorId: String, val senderPubkey: String)
             var notifDmZapTarget by remember { mutableStateOf<NotifDmZapInfo?>(null) }
@@ -2801,7 +2802,8 @@ fun WispNavHost(
                     notifReplyScope.launch {
                         val hint = feedViewModel.outboxRouter?.getRelayHint(replyToEvent.pubkey) ?: ""
                         val tags = com.wisp.app.nostr.Nip10.buildReplyTags(replyToEvent, hint) +
-                            com.wisp.app.nostr.Nip30.buildEmojiTagsForContent(content, notifResolvedEmojis)
+                            com.wisp.app.nostr.Nip30.buildEmojiTagsForContent(content, notifResolvedEmojis) +
+                            if (notifInterfacePrefs.isClientTagEnabled()) listOf(listOf("client", "Wisp")) else emptyList()
 
                         if (feedViewModel.powPrefs.isNotePowEnabled()) {
                             feedViewModel.powManager.submitNote(

@@ -25,10 +25,16 @@ import com.wisp.app.repo.ContactRepository
 import com.wisp.app.repo.DmRepository
 import com.wisp.app.repo.EventRepository
 import com.wisp.app.repo.KeyRepository
+import com.wisp.app.repo.MentionCandidate
+import com.wisp.app.repo.MentionSearchRepository
 import com.wisp.app.repo.NotificationRepository
 import com.wisp.app.repo.PowPreferences
+import com.wisp.app.repo.ProfileRepository
 import com.wisp.app.repo.RelayListRepository
 import com.wisp.app.R
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import com.wisp.app.nostr.Nip19
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -110,6 +116,16 @@ class NotificationsViewModel(app: Application) : AndroidViewModel(app) {
     private var powPrefs: PowPreferences? = null
     private val keyRepo = KeyRepository(getApplication())
 
+    // ── Mention search ──────────────────────────────────────────────────
+    private var mentionSearchRepo: MentionSearchRepository? = null
+    private var mentionStartIndex: Int = -1
+
+    private val _mentionQuery = MutableStateFlow<String?>(null)
+    val mentionQuery: StateFlow<String?> = _mentionQuery
+
+    private val _mentionCandidates = MutableStateFlow<List<MentionCandidate>>(emptyList())
+    val mentionCandidates: StateFlow<List<MentionCandidate>> = _mentionCandidates
+
     fun init(
         notificationRepository: NotificationRepository,
         eventRepository: EventRepository,
@@ -117,7 +133,9 @@ class NotificationsViewModel(app: Application) : AndroidViewModel(app) {
         dmRepository: DmRepository? = null,
         relayPool: RelayPool? = null,
         relayListRepository: RelayListRepository? = null,
-        powPreferences: PowPreferences? = null
+        powPreferences: PowPreferences? = null,
+        profileRepository: ProfileRepository? = null,
+        eventPersistence: com.wisp.app.db.EventPersistence? = null
     ) {
         notifRepo = notificationRepository
         eventRepo = eventRepository
@@ -126,6 +144,14 @@ class NotificationsViewModel(app: Application) : AndroidViewModel(app) {
         this.relayPool = relayPool
         relayListRepo = relayListRepository
         powPrefs = powPreferences
+        if (profileRepository != null && relayPool != null) {
+            mentionSearchRepo = MentionSearchRepository(profileRepository, contactRepository, relayPool, keyRepo).also {
+                it.eventPersistence = eventPersistence
+            }
+            viewModelScope.launch {
+                mentionSearchRepo!!.candidates.collect { _mentionCandidates.value = it }
+            }
+        }
         startPeriodicRefresh()
         startFilterCombine()
         startSummaryCombine()
@@ -225,6 +251,62 @@ class NotificationsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun getProfileData(pubkey: String): ProfileData? {
         return eventRepo?.getProfileData(pubkey)
+    }
+
+    // ── Mention autocomplete ──────────────────────────────────────────────
+
+    fun detectMentionQuery(value: TextFieldValue) {
+        val text = value.text
+        val cursor = value.selection.start
+
+        if (cursor == 0 || text.isEmpty()) {
+            clearMentionState()
+            return
+        }
+
+        var atIndex = -1
+        for (i in (cursor - 1) downTo 0) {
+            val c = text[i]
+            if (c == '@') {
+                if (i == 0 || text[i - 1].isWhitespace()) {
+                    atIndex = i
+                }
+                break
+            }
+            if (c.isWhitespace()) break
+        }
+
+        if (atIndex == -1) {
+            clearMentionState()
+            return
+        }
+
+        mentionStartIndex = atIndex
+        val query = text.substring(atIndex + 1, cursor)
+        _mentionQuery.value = query
+        mentionSearchRepo?.search(query, viewModelScope)
+    }
+
+    fun selectMention(candidate: MentionCandidate, currentText: String, cursorPos: Int): TextFieldValue {
+        if (mentionStartIndex < 0 || mentionStartIndex > currentText.length) {
+            clearMentionState()
+            return TextFieldValue(currentText, TextRange(cursorPos))
+        }
+
+        val nprofile = "nostr:" + Nip19.nprofileEncode(candidate.profile.pubkey)
+        val before = currentText.substring(0, mentionStartIndex)
+        val after = if (cursorPos < currentText.length) currentText.substring(cursorPos) else ""
+        val newText = before + nprofile + " " + after
+        val newCursor = before.length + nprofile.length + 1
+
+        clearMentionState()
+        return TextFieldValue(newText, TextRange(newCursor))
+    }
+
+    fun clearMentionState() {
+        _mentionQuery.value = null
+        mentionStartIndex = -1
+        mentionSearchRepo?.clear()
     }
 
     // ── Inline DM Send ──────────────────────────────────────────────────
