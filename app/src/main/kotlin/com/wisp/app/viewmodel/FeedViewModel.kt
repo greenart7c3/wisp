@@ -222,6 +222,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
                 // may be stale. Re-fetch self-data so they're up to date.
                 startup.refreshSelfData()
             }
+            onGroupReconnect?.invoke()
         }
     )
     val socialGraphDb = SocialGraphDb(app)
@@ -402,6 +403,8 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         startup.reloadForNewAccount()
         groupRepo.reload(getUserPubkey())
     }
+    /** Called after relay reconnect to re-subscribe notified group channels. */
+    var onGroupReconnect: (() -> Unit)? = null
     fun onAppPause() = startup.onAppPause()
     fun onAppResume(pausedMs: Long) = startup.onAppResume(pausedMs)
     fun refreshRelays() = startup.refreshRelays()
