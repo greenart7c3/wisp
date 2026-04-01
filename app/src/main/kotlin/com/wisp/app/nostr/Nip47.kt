@@ -22,7 +22,8 @@ object Nip47 {
         val walletServicePubkey: ByteArray,
         val relayUrl: String,
         val clientSecret: ByteArray,
-        val encryption: NwcEncryption = NwcEncryption.NIP04
+        val encryption: NwcEncryption = NwcEncryption.NIP04,
+        val lud16: String? = null
     ) {
         val clientPubkey: ByteArray get() = Keys.xOnlyPubkey(clientSecret)
 
@@ -97,7 +98,8 @@ object Nip47 {
             NwcConnection(
                 walletServicePubkey = pubkeyHex.hexToByteArray(),
                 relayUrl = relayUrl,
-                clientSecret = secretHex.hexToByteArray()
+                clientSecret = secretHex.hexToByteArray(),
+                lud16 = params["lud16"]
             )
         } catch (_: Exception) {
             null

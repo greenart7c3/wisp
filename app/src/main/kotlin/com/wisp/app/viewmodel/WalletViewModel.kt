@@ -17,6 +17,7 @@ import com.wisp.app.relay.RelayEvent
 import com.wisp.app.repo.SigningMode
 import com.wisp.app.repo.EventRepository
 import com.wisp.app.repo.KeyRepository
+import com.wisp.app.repo.BalanceUnit
 import com.wisp.app.repo.NwcRepository
 import com.wisp.app.repo.SparkRepository
 import com.wisp.app.repo.WalletMode
@@ -130,6 +131,14 @@ class WalletViewModel(
 
     private val _walletMode = MutableStateFlow(walletModeRepo.getMode())
     val walletMode: StateFlow<WalletMode> = _walletMode
+
+    private val _balanceUnit = MutableStateFlow(walletModeRepo.getBalanceUnit())
+    val balanceUnit: StateFlow<BalanceUnit> = _balanceUnit
+
+    fun setBalanceUnit(unit: BalanceUnit) {
+        walletModeRepo.setBalanceUnit(unit)
+        _balanceUnit.value = unit
+    }
 
     private val activeProvider: WalletProvider
         get() = when (_walletMode.value) {
@@ -247,6 +256,10 @@ class WalletViewModel(
     // Delete relay backup
     private val _deleteBackupStatus = MutableStateFlow<DeleteBackupStatus>(DeleteBackupStatus.Idle)
     val deleteBackupStatus: StateFlow<DeleteBackupStatus> = _deleteBackupStatus
+
+    // True when relay backup check completed and no relays have the backup
+    private val _backupMissing = MutableStateFlow(false)
+    val backupMissing: StateFlow<Boolean> = _backupMissing
 
     private val _registeredAddress = MutableStateFlow<String?>(null)
 
@@ -513,6 +526,11 @@ class WalletViewModel(
         nwcRepo.saveConnectionString(trimmed)
         _connectionString.value = trimmed
 
+        // Extract lud16 from NWC URI if present
+        if (parsed.lud16 != null) {
+            _lightningAddress.value = parsed.lud16
+        }
+
         startStatusCollection(nwcRepo)
         nwcRepo.connect()
         startConnectionMonitor(nwcRepo)
@@ -559,10 +577,13 @@ class WalletViewModel(
         sparkRepo.connect()
         startConnectionMonitor(sparkRepo)
 
-        // Fetch lightning address once connected
+        // Fetch lightning address and check relay backup once connected
         viewModelScope.launch {
             sparkRepo.isConnected.first { it }
             fetchLightningAddress()
+            if (keyRepo.isLoggedIn()) {
+                checkRelayBackupStatuses()
+            }
         }
     }
 
@@ -1295,6 +1316,7 @@ class WalletViewModel(
                 val sent = relayPool.sendToWriteRelays(msg)
                 if (sent > 0) {
                     _backupStatus.value = BackupStatus.Success
+                    _backupMissing.value = false
                     // Allow relays time to index the event, then refresh statuses
                     delay(3_000)
                     checkRelayBackupStatuses()
@@ -1492,9 +1514,13 @@ class WalletViewModel(
                 eoseJob.cancel()
                 relayPool.closeOnAllRelays(subId)
 
-                _relayBackupStatuses.value = relayUrls.map { url ->
+                val statuses = relayUrls.map { url ->
                     RelayBackupInfo(relayUrl = url, hasBackup = url in relaysWithBackup)
                 }
+                _relayBackupStatuses.value = statuses
+                // Only flag backup as missing if a majority of relays responded
+                val minResponses = (relayCount + 1) / 2 // at least half
+                _backupMissing.value = eoseCount >= minResponses && statuses.none { it.hasBackup }
             } catch (_: Exception) {
                 // Keep existing statuses on error
             }
