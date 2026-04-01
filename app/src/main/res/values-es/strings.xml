@@ -447,7 +447,7 @@
     <string name="settings_large_text">Texto grande</string>
     <string name="settings_increase_text_size">Aumentar el tamaño del texto en toda la app</string>
     <string name="settings_language">Idioma</string>
-    <string name="settings_popular_themes">Temas Populares</string>
+    <string name="settings_popular_themes">Temas</string>
     <string name="settings_choose_color_scheme">Elegir esquema de colores</string>
     <string name="settings_accent_color">Color de Acento</string>
     <string name="settings_preview">Vista previa</string>

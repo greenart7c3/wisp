@@ -424,7 +424,7 @@
     <string name="settings_large_text">Крупный текст</string>
     <string name="settings_increase_text_size">Увеличить размер текста во всём приложении</string>
     <string name="settings_language">Язык</string>
-    <string name="settings_popular_themes">Популярные темы</string>
+    <string name="settings_popular_themes">Темы</string>
     <string name="settings_choose_color_scheme">Выберите цветовую схему</string>
     <string name="settings_accent_color">Акцентный цвет</string>
     <string name="settings_preview">Предпросмотр</string>

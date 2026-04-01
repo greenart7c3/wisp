@@ -447,7 +447,7 @@
     <string name="settings_large_text">大字体</string>
     <string name="settings_increase_text_size">增大整个应用的字体</string>
     <string name="settings_language">语言</string>
-    <string name="settings_popular_themes">热门主题</string>
+    <string name="settings_popular_themes">主题</string>
     <string name="settings_choose_color_scheme">选择配色方案</string>
     <string name="settings_accent_color">强调色</string>
     <string name="settings_preview">预览</string>

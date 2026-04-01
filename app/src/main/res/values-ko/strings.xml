@@ -447,7 +447,7 @@
     <string name="settings_large_text">큰 텍스트</string>
     <string name="settings_increase_text_size">앱 전체 텍스트 크기 확대</string>
     <string name="settings_language">언어</string>
-    <string name="settings_popular_themes">인기 테마</string>
+    <string name="settings_popular_themes">테마</string>
     <string name="settings_choose_color_scheme">색상 조합 선택</string>
     <string name="settings_accent_color">강조 색상</string>
     <string name="settings_preview">미리보기</string>
