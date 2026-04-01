@@ -948,11 +948,11 @@ private fun DmExpansion(
                         LightningAnimation(modifier = Modifier.size(18.dp))
                     } else {
                         Icon(
-                            Icons.Outlined.CurrencyBitcoin,
+                            painter = androidx.compose.ui.res.painterResource(com.wisp.app.R.drawable.ic_bolt),
                             contentDescription = "Zap",
                             tint = if (dmZapSats > 0) WispThemeColors.zapColor
                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(15.dp)
                         )
                     }
                 }
@@ -1720,9 +1720,9 @@ private fun NotificationTypeIcon(item: FlatNotificationItem, showSats: Boolean =
     if (item.type == NotificationType.ZAP || item.type == NotificationType.DM_ZAP || item.type == NotificationType.PROFILE_ZAP) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
-                Icons.Outlined.CurrencyBitcoin,
+                painter = androidx.compose.ui.res.painterResource(com.wisp.app.R.drawable.ic_bolt),
                 contentDescription = stringResource(R.string.cd_send_zap),
-                modifier = Modifier.size(iconSize),
+                modifier = Modifier.size(iconSize - 4.dp),
                 tint = WispThemeColors.zapColor
             )
             if (showSats && item.zapSats > 0) {

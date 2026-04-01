@@ -64,7 +64,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.ElectricBolt
+
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Receipt
@@ -127,6 +127,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import com.wisp.app.BuildConfig
 import com.wisp.app.R
+import com.wisp.app.repo.BalanceUnit
 import com.wisp.app.repo.WalletMode
 import com.wisp.app.repo.WalletTransaction
 import com.wisp.app.ui.component.SatsNumpad
@@ -237,7 +238,8 @@ fun WalletScreen(
                             }
                             else -> WalletModeSelectionContent(
                                 onSelectNwc = { viewModel.selectNwcMode() },
-                                onSelectSpark = { viewModel.selectSparkMode() }
+                                onSelectSpark = { viewModel.selectSparkMode() },
+                                onRestoreSpark = { viewModel.selectSparkMode() }
                             )
                         }
                     }
@@ -264,8 +266,11 @@ fun WalletScreen(
                     is WalletPage.Home -> WalletHomeContent(
                         balanceMsats = balanceMsats,
                         walletMode = viewModel.walletMode.collectAsState().value,
+                        balanceUnit = viewModel.balanceUnit.collectAsState().value,
                         showSettingsAlert = viewModel.walletMode.collectAsState().value == WalletMode.SPARK
                                 && !viewModel.seedBackupAcked.collectAsState().value,
+                        seedBackupAcked = viewModel.seedBackupAcked.collectAsState().value,
+                        backupMissing = viewModel.backupMissing.collectAsState().value,
                         onSend = { viewModel.navigateTo(WalletPage.SendInput) },
                         onReceive = {
                             viewModel.navigateTo(WalletPage.ReceiveAmount)
@@ -276,6 +281,11 @@ fun WalletScreen(
                         },
                         onRefresh = { viewModel.refreshBalance() },
                         onSettings = { viewModel.navigateTo(WalletPage.Settings) },
+                        onBackupToRelay = {
+                            viewModel.resetBackupStatus()
+                            viewModel.navigateTo(WalletPage.BackupToRelay)
+                        },
+                        onViewSeed = { viewModel.showMnemonicBackup() },
                         lightningAddress = viewModel.lightningAddress.collectAsState().value,
                         onSetupAddress = {
                             viewModel.resetAddressSetupState()
@@ -393,6 +403,8 @@ fun WalletScreen(
                     }
                     is WalletPage.Settings -> WalletSettingsContent(
                         walletMode = viewModel.walletMode.collectAsState().value,
+                        balanceUnit = viewModel.balanceUnit.collectAsState().value,
+                        onBalanceUnitChange = { viewModel.setBalanceUnit(it) },
                         lightningAddress = viewModel.lightningAddress.collectAsState().value,
                         lightningAddressLoading = viewModel.lightningAddressLoading.collectAsState().value,
                         onSetupAddress = {
@@ -464,8 +476,11 @@ fun WalletScreen(
                         WalletHomeContent(
                             balanceMsats = balanceMsats,
                             walletMode = viewModel.walletMode.collectAsState().value,
+                            balanceUnit = viewModel.balanceUnit.collectAsState().value,
                             showSettingsAlert = viewModel.walletMode.collectAsState().value == WalletMode.SPARK
                                     && !viewModel.seedBackupAcked.collectAsState().value,
+                            seedBackupAcked = viewModel.seedBackupAcked.collectAsState().value,
+                            backupMissing = viewModel.backupMissing.collectAsState().value,
                             onSend = { viewModel.navigateTo(WalletPage.SendInput) },
                             onReceive = { viewModel.navigateTo(WalletPage.ReceiveAmount) },
                             onTransactions = {
@@ -474,6 +489,11 @@ fun WalletScreen(
                             },
                             onRefresh = { viewModel.refreshBalance() },
                             onSettings = { viewModel.navigateTo(WalletPage.Settings) },
+                            onBackupToRelay = {
+                                viewModel.resetBackupStatus()
+                                viewModel.navigateTo(WalletPage.BackupToRelay)
+                            },
+                            onViewSeed = { viewModel.showMnemonicBackup() },
                             lightningAddress = viewModel.lightningAddress.collectAsState().value,
                             onSetupAddress = {
                                 viewModel.resetAddressSetupState()
@@ -641,12 +661,17 @@ private fun WalletConnectionContent(
 private fun WalletHomeContent(
     balanceMsats: Long,
     walletMode: WalletMode = WalletMode.NWC,
+    balanceUnit: BalanceUnit = BalanceUnit.BITCOIN,
     showSettingsAlert: Boolean = false,
+    seedBackupAcked: Boolean = true,
+    backupMissing: Boolean = false,
     onSend: () -> Unit,
     onReceive: () -> Unit,
     onTransactions: () -> Unit,
     onRefresh: () -> Unit,
     onSettings: () -> Unit,
+    onBackupToRelay: () -> Unit = {},
+    onViewSeed: () -> Unit = {},
     lightningAddress: String? = null,
     onSetupAddress: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -691,6 +716,79 @@ private fun WalletHomeContent(
             }
         }
 
+        // Backup missing warning (big nasty warning)
+        if (walletMode == WalletMode.SPARK && backupMissing) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFFD32F2F).copy(alpha = 0.12f)
+                ),
+                border = BorderStroke(1.dp, Color(0xFFD32F2F))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        stringResource(R.string.wallet_backup_missing_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = Color(0xFFD32F2F)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        stringResource(R.string.wallet_backup_missing_body),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = onBackupToRelay,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
+                    ) {
+                        Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.wallet_backup_now))
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
+        // Seed not yet viewed nudge
+        if (walletMode == WalletMode.SPARK && !seedBackupAcked && !backupMissing) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFFE6A040).copy(alpha = 0.12f)
+                ),
+                border = BorderStroke(1.dp, Color(0xFFE6A040))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        stringResource(R.string.wallet_seed_not_viewed_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = Color(0xFFE6A040)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        stringResource(R.string.wallet_seed_not_viewed_body),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = onViewSeed,
+                        modifier = Modifier.fillMaxWidth(),
+                        border = BorderStroke(1.dp, Color(0xFFE6A040))
+                    ) {
+                        Text(
+                            stringResource(R.string.wallet_view_seed),
+                            color = Color(0xFFE6A040)
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
         Spacer(Modifier.weight(1f))
 
         // Balance — tap to hide/show
@@ -712,18 +810,52 @@ private fun WalletHomeContent(
                 )
             } else {
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        "%,d".format(balanceSats),
-                        style = MaterialTheme.typography.displaySmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        stringResource(R.string.wallet_sats),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
+                    when (balanceUnit) {
+                        BalanceUnit.BITCOIN -> {
+                            Text(
+                                "\u20BF",
+                                style = MaterialTheme.typography.displaySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(bottom = 0.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                "%,d".format(balanceSats),
+                                style = MaterialTheme.typography.displaySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        BalanceUnit.LIGHTNING -> {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_bolt),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier
+                                    .height(24.dp)
+                                    .align(Alignment.CenterVertically)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "%,d".format(balanceSats),
+                                style = MaterialTheme.typography.displaySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        BalanceUnit.SATS -> {
+                            Text(
+                                "%,d".format(balanceSats),
+                                style = MaterialTheme.typography.displaySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                stringResource(R.string.wallet_sats),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -755,10 +887,10 @@ private fun WalletHomeContent(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        Icons.Default.ElectricBolt,
+                        painter = painterResource(R.drawable.ic_bolt),
                         contentDescription = null,
                         tint = Color(0xFFE6A040),
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(20.dp)
                     )
                     Spacer(Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
@@ -782,6 +914,72 @@ private fun WalletHomeContent(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary
             )
+        }
+
+        // Wallet branding
+        if (walletMode == WalletMode.SPARK) {
+            Spacer(Modifier.height(16.dp))
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    stringResource(R.string.wallet_powered_by),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Image(
+                        painter = painterResource(R.drawable.ic_spark_wordmark),
+                        contentDescription = "Spark",
+                        modifier = Modifier.height(15.dp),
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(
+                            MaterialTheme.colorScheme.onSurface
+                        )
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "+",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Image(
+                        painter = painterResource(R.drawable.ic_breez_logo),
+                        contentDescription = "Breez",
+                        modifier = Modifier.height(15.dp),
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(
+                            MaterialTheme.colorScheme.onSurface
+                        )
+                    )
+                }
+            }
+        } else if (walletMode == WalletMode.NWC) {
+            Spacer(Modifier.height(16.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.ic_nwc_logo),
+                    contentDescription = "NWC",
+                    modifier = Modifier.height(16.dp),
+                    colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    stringResource(R.string.wallet_nwc),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
 
         Spacer(Modifier.weight(1f))
@@ -1343,7 +1541,7 @@ private fun SendConfirmContent(
             modifier = Modifier.fillMaxWidth(),
             enabled = feeState !is FeeState.Loading
         ) {
-            Icon(Icons.Default.ElectricBolt, contentDescription = null, modifier = Modifier.size(18.dp))
+            Icon(painter = painterResource(R.drawable.ic_bolt), contentDescription = null, modifier = Modifier.size(15.dp))
             Spacer(Modifier.width(8.dp))
             Text(stringResource(R.string.wallet_pay))
         }
@@ -1424,10 +1622,10 @@ private fun SendingContent(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.Center
     ) {
         Icon(
-            Icons.Default.ElectricBolt,
+            painter = painterResource(R.drawable.ic_bolt),
             contentDescription = null,
             modifier = Modifier
-                .size(80.dp)
+                .size(64.dp)
                 .scale(scale),
             tint = MaterialTheme.colorScheme.primary.copy(alpha = alpha)
         )
@@ -1977,7 +2175,8 @@ private fun TransactionRow(
 @Composable
 private fun WalletModeSelectionContent(
     onSelectNwc: () -> Unit,
-    onSelectSpark: () -> Unit
+    onSelectSpark: () -> Unit,
+    onRestoreSpark: () -> Unit = {}
 ) {
     Spacer(Modifier.height(16.dp))
 
@@ -2013,6 +2212,31 @@ private fun WalletModeSelectionContent(
             Spacer(Modifier.height(4.dp))
             Text(
                 stringResource(R.string.wallet_create_description),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+
+    Spacer(Modifier.height(12.dp))
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onRestoreSpark() },
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                stringResource(R.string.wallet_restore_existing),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                stringResource(R.string.wallet_restore_existing_description),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -2430,6 +2654,8 @@ private fun SparkBackupContent(
 @Composable
 private fun WalletSettingsContent(
     walletMode: WalletMode,
+    balanceUnit: BalanceUnit = BalanceUnit.BITCOIN,
+    onBalanceUnitChange: (BalanceUnit) -> Unit = {},
     lightningAddress: String?,
     lightningAddressLoading: Boolean = false,
     onSetupAddress: () -> Unit,
@@ -2547,9 +2773,77 @@ private fun WalletSettingsContent(
                     onClick = onSetupAddress,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Default.ElectricBolt, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(painter = painterResource(R.drawable.ic_bolt), contentDescription = null, modifier = Modifier.size(15.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("Set Up Lightning Address")
+                }
+            }
+        }
+
+        // Display section
+        Spacer(Modifier.height(24.dp))
+
+        Text(
+            "Display",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        Text(
+            "Balance Unit",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Spacer(Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            val units = listOf(BalanceUnit.SATS, BalanceUnit.BITCOIN, BalanceUnit.LIGHTNING)
+            units.forEach { unit ->
+                val selected = balanceUnit == unit
+                val tint = if (selected) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface
+                OutlinedButton(
+                    onClick = { onBalanceUnitChange(unit) },
+                    modifier = Modifier.weight(1f),
+                    border = BorderStroke(
+                        1.dp,
+                        if (selected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outline
+                    ),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = if (selected)
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                        else MaterialTheme.colorScheme.surface
+                    )
+                ) {
+                    when (unit) {
+                        BalanceUnit.BITCOIN -> Text(
+                            "\u20BF 1,000",
+                            color = tint,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        BalanceUnit.LIGHTNING -> {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_bolt),
+                                contentDescription = null,
+                                tint = tint,
+                                modifier = Modifier.height(14.dp)
+                            )
+                            Spacer(Modifier.width(3.dp))
+                            Text("1,000", color = tint, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        BalanceUnit.SATS -> Text(
+                            "1,000 sats",
+                            color = tint,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 }
             }
         }
@@ -2749,44 +3043,55 @@ private fun WalletSettingsContent(
         // Footer
         Spacer(Modifier.height(32.dp))
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (walletMode == WalletMode.SPARK) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_spark_logo),
-                    contentDescription = "Spark",
-                    modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+        if (walletMode == WalletMode.SPARK) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.ic_spark_badge),
+                    contentDescription = "Built on Spark",
+                    modifier = Modifier.height(22.dp),
+                    colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Image(
+                        painter = painterResource(R.drawable.ic_breez_logo),
+                        contentDescription = "Breez",
+                        modifier = Modifier.height(16.dp),
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        stringResource(R.string.wallet_spark_sdk, BuildConfig.BREEZ_SDK_VERSION),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.ic_nwc_logo),
+                    contentDescription = "NWC",
+                    modifier = Modifier.height(18.dp),
+                    colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 )
                 Spacer(Modifier.width(6.dp))
-                Text(
-                    "Spark",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    "·",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.width(12.dp))
-                Icon(
-                    painter = painterResource(R.drawable.ic_breez_logo),
-                    contentDescription = "Breez",
-                    modifier = Modifier.height(12.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    stringResource(R.string.wallet_spark_sdk, BuildConfig.BREEZ_SDK_VERSION),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
                 Text(
                     stringResource(R.string.wallet_nwc),
                     style = MaterialTheme.typography.labelSmall,

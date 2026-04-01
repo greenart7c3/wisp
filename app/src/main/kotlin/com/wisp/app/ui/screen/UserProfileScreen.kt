@@ -33,7 +33,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.ElectricBolt
+
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Search
@@ -69,6 +69,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -1134,9 +1135,10 @@ private fun ProfileHeader(
                     if (profile?.lud16 != null && onZapClick != null) {
                         IconButton(onClick = onZapClick) {
                             Icon(
-                                Icons.Default.ElectricBolt,
+                                painter = painterResource(R.drawable.ic_bolt),
                                 contentDescription = "Zap",
-                                tint = Color(0xFFFFC107)
+                                tint = Color(0xFFFFC107),
+                                modifier = Modifier.size(22.dp)
                             )
                         }
                     }
@@ -1229,10 +1231,10 @@ private fun ProfileHeader(
                 }
             ) {
                 Icon(
-                    Icons.Default.ElectricBolt,
+                    painter = painterResource(R.drawable.ic_bolt),
                     contentDescription = "Lightning address",
                     tint = Color(0xFFFFC107),
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(16.dp)
                 )
                 Spacer(Modifier.width(4.dp))
                 Text(

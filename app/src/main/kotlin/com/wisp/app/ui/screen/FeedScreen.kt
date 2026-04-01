@@ -2371,7 +2371,7 @@ private fun TrendingFilterBar(
             TrendingMetric.REACTIONS -> Icon(Icons.Outlined.FavoriteBorder, contentDescription = m.label, modifier = Modifier.size(16.dp))
             TrendingMetric.REPLIES -> Icon(Icons.AutoMirrored.Outlined.Reply, contentDescription = m.label, modifier = Modifier.size(16.dp))
             TrendingMetric.REPOSTS -> Icon(Icons.Outlined.Repeat, contentDescription = m.label, modifier = Modifier.size(16.dp))
-            TrendingMetric.ZAPS -> Icon(Icons.Outlined.CurrencyBitcoin, contentDescription = m.label, modifier = Modifier.size(16.dp))
+            TrendingMetric.ZAPS -> Icon(painter = androidx.compose.ui.res.painterResource(com.wisp.app.R.drawable.ic_bolt), contentDescription = m.label, modifier = Modifier.size(14.dp))
         }
     }
 

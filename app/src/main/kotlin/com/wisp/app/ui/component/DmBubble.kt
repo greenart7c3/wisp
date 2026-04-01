@@ -279,11 +279,11 @@ fun DmBubble(
                         LightningAnimation(modifier = Modifier.size(18.dp))
                     } else {
                         Icon(
-                            Icons.Outlined.CurrencyBitcoin,
-                            "Zap",
+                            painter = androidx.compose.ui.res.painterResource(com.wisp.app.R.drawable.ic_bolt),
+                            contentDescription = "Zap",
                             tint = if (zapSats > 0) WispThemeColors.zapColor
                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(15.dp)
                         )
                     }
                 }

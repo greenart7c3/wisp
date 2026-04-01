@@ -46,6 +46,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
@@ -933,13 +934,25 @@ internal fun TopZapperBanner(
             )
             Spacer(Modifier.width(5.dp))
 
-            // Bitcoin icon
-            Icon(
-                Icons.Outlined.CurrencyBitcoin,
-                contentDescription = null,
-                tint = orange,
-                modifier = Modifier.size(16.dp)
-            )
+            // Zap icon
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val useZapBolt = remember { context.getSharedPreferences("wisp_settings", android.content.Context.MODE_PRIVATE) }
+                .getBoolean("zap_bolt_icon", false)
+            if (useZapBolt) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_bolt),
+                    contentDescription = null,
+                    tint = orange,
+                    modifier = Modifier.size(13.dp)
+                )
+            } else {
+                Icon(
+                    Icons.Outlined.CurrencyBitcoin,
+                    contentDescription = null,
+                    tint = orange,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
 
             // Amount
             Text(

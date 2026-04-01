@@ -171,8 +171,15 @@ fun ZapRow(
             )
             Spacer(Modifier.width(2.dp))
         }
+        Icon(
+            painter = androidx.compose.ui.res.painterResource(R.drawable.ic_bolt),
+            contentDescription = null,
+            tint = Color(0xFFFF8C00),
+            modifier = Modifier.size(14.dp)
+        )
+        Spacer(Modifier.width(2.dp))
         Text(
-            text = "\u26A1 ${formatSats(sats)}",
+            text = formatSats(sats),
             style = MaterialTheme.typography.labelLarge,
             color = Color(0xFFFF8C00)
         )

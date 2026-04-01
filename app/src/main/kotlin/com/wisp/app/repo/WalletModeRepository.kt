@@ -4,6 +4,8 @@ import android.content.Context
 
 enum class WalletMode { NONE, NWC, SPARK }
 
+enum class BalanceUnit { BITCOIN, LIGHTNING, SATS }
+
 class WalletModeRepository(private val context: Context, pubkeyHex: String? = null) {
 
     private var prefs = context.getSharedPreferences(
@@ -22,6 +24,15 @@ class WalletModeRepository(private val context: Context, pubkeyHex: String? = nu
 
     fun setMode(mode: WalletMode) {
         prefs.edit().putString("wallet_mode", mode.name).apply()
+    }
+
+    fun getBalanceUnit(): BalanceUnit {
+        val name = prefs.getString("balance_unit", null) ?: return BalanceUnit.SATS
+        return try { BalanceUnit.valueOf(name) } catch (_: Exception) { BalanceUnit.SATS }
+    }
+
+    fun setBalanceUnit(unit: BalanceUnit) {
+        prefs.edit().putString("balance_unit", unit.name).apply()
     }
 
     companion object {

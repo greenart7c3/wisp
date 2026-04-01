@@ -701,6 +701,15 @@
     <string name="wallet_spark_sdk">SDK v%s</string>
     <string name="wallet_not_supported">Not supported by your wallet</string>
     <string name="wallet_creating_invoice">Creating invoice…</string>
+    <string name="wallet_restore_existing">Restore Existing Wallet</string>
+    <string name="wallet_restore_existing_description">Restore a Spark wallet from a recovery phrase or relay backup.</string>
+    <string name="wallet_backup_missing_title">Wallet backup not found</string>
+    <string name="wallet_backup_missing_body">Your wallet recovery phrase is not backed up to any relay. If you lose this device, you could lose your funds.</string>
+    <string name="wallet_backup_now">Backup Now</string>
+    <string name="wallet_seed_not_viewed_title">Back up your recovery phrase</string>
+    <string name="wallet_seed_not_viewed_body">You haven\'t viewed your recovery phrase yet. Write it down to protect your funds.</string>
+    <string name="wallet_view_seed">View Recovery Phrase</string>
+    <string name="wallet_powered_by">Powered by</string>
 
     <!-- NIP-29 Chat Rooms -->
     <string name="tab_direct_messages">Direct Messages</string>

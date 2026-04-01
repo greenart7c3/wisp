@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.CurrencyBitcoin
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -54,6 +55,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import android.content.Intent
@@ -445,6 +447,45 @@ fun InterfaceScreen(
                         interfacePrefs.setClientTagEnabled(it)
                     }
                 )
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // Zap icon toggle
+            var zapBoltIcon by remember { mutableStateOf(interfacePrefs.isZapBoltIcon()) }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Zap Icon", style = MaterialTheme.typography.bodyMedium)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Icon(
+                        Icons.Outlined.CurrencyBitcoin,
+                        contentDescription = "Bitcoin symbol",
+                        tint = if (!zapBoltIcon) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clickable {
+                                zapBoltIcon = false
+                                interfacePrefs.setZapBoltIcon(false)
+                            }
+                    )
+                    Icon(
+                        painter = painterResource(R.drawable.ic_bolt),
+                        contentDescription = "Lightning bolt",
+                        tint = if (zapBoltIcon) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier
+                            .height(24.dp)
+                            .clickable {
+                                zapBoltIcon = true
+                                interfacePrefs.setZapBoltIcon(true)
+                            }
+                    )
+                }
             }
 
             Spacer(Modifier.height(32.dp))

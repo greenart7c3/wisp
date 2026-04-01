@@ -476,10 +476,11 @@ private fun LightningInvoiceCard(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "\u26A1",
-                style = MaterialTheme.typography.titleMedium,
-                color = primary
+            Icon(
+                painter = painterResource(com.wisp.app.R.drawable.ic_bolt),
+                contentDescription = null,
+                tint = primary,
+                modifier = Modifier.size(20.dp)
             )
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
