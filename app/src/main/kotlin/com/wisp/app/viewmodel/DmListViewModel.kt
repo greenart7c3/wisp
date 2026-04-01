@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.wisp.app.nostr.DmConversation
 import com.wisp.app.nostr.DmMessage
 import com.wisp.app.nostr.DmReaction
+import com.wisp.app.nostr.EncryptedMedia
 import com.wisp.app.nostr.Nip17
 import com.wisp.app.nostr.NostrEvent
 import com.wisp.app.nostr.NostrSigner
@@ -72,6 +73,9 @@ class DmListViewModel(app: Application) : AndroidViewModel(app) {
             val convKey = DmRepository.conversationKey(participants + myPubkey)
             val replyToId = rumor.tags.firstOrNull { it.size >= 2 && it[0] == "e" && it.any { v -> v == "reply" } }?.get(1)
             val rumorId = Nip17.computeRumorId(rumor)
+            val fileMetadata = if (Nip17.isFileMessage(rumor)) {
+                EncryptedMedia.parseKind15Tags(rumor.tags, rumor.content)
+            } else null
             val msg = DmMessage(
                 id = "${event.id}:${rumor.createdAt}",
                 senderPubkey = rumor.pubkey,
@@ -82,6 +86,7 @@ class DmListViewModel(app: Application) : AndroidViewModel(app) {
                 rumorId = rumorId,
                 replyToId = replyToId,
                 participants = participants,
+                encryptedFileMetadata = fileMetadata,
                 debugGiftWrapJson = event.toJson(),
                 debugRumorJson = Nip17.rumorToJson(rumor)
             )
@@ -156,6 +161,9 @@ class DmListViewModel(app: Application) : AndroidViewModel(app) {
                         val convKey = DmRepository.conversationKey(participants + myPubkey)
                         val replyToId = rumor.tags.firstOrNull { it.size >= 2 && it[0] == "e" && it.any { v -> v == "reply" } }?.get(1)
                         val rumorId = Nip17.computeRumorId(rumor)
+                        val fileMetadata = if (Nip17.isFileMessage(rumor)) {
+                            EncryptedMedia.parseKind15Tags(rumor.tags, rumor.content)
+                        } else null
                         val msg = DmMessage(
                             id = "${wrap.event.id}:${rumor.createdAt}",
                             senderPubkey = rumor.pubkey,
@@ -166,6 +174,7 @@ class DmListViewModel(app: Application) : AndroidViewModel(app) {
                             rumorId = rumorId,
                             replyToId = replyToId,
                             participants = participants,
+                            encryptedFileMetadata = fileMetadata,
                             debugGiftWrapJson = wrap.event.toJson(),
                             debugRumorJson = Nip17.rumorToJson(rumor)
                         )

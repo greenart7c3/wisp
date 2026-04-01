@@ -4,6 +4,7 @@ import android.util.Log
 import com.wisp.app.nostr.Blossom
 import com.wisp.app.nostr.DmMessage
 import com.wisp.app.nostr.DmReaction
+import com.wisp.app.nostr.EncryptedMedia
 import com.wisp.app.nostr.DmZap
 import com.wisp.app.nostr.Nip10
 import com.wisp.app.nostr.Nip17
@@ -540,6 +541,9 @@ class EventRouter(
         val replyToId = rumor.tags.firstOrNull { it.size >= 2 && it[0] == "e" && it.any { v -> v == "reply" } }?.get(1)
         val rumorId = Nip17.computeRumorId(rumor)
         val emojiMap = Nip30.parseEmojiTags(rumor.tags)
+        val fileMetadata = if (Nip17.isFileMessage(rumor)) {
+            EncryptedMedia.parseKind15Tags(rumor.tags, rumor.content)
+        } else null
         val msg = DmMessage(
             id = "${event.id}:${rumor.createdAt}",
             senderPubkey = rumor.pubkey,
@@ -551,6 +555,7 @@ class EventRouter(
             replyToId = replyToId,
             participants = participants,
             emojiMap = emojiMap,
+            encryptedFileMetadata = fileMetadata,
             debugGiftWrapJson = event.toJson(),
             debugRumorJson = Nip17.rumorToJson(rumor)
         )

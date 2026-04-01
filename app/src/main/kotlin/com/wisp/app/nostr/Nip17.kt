@@ -42,7 +42,7 @@ object Nip17 {
 
         // Layer 1: Build unsigned rumor (id but no sig)
         val rumorTags = mutableListOf<List<String>>()
-        if (rumorKind == 14) rumorTags.add(listOf("p", rumorPTag ?: recipientPubkeyHex))
+        if (rumorKind == 14 || rumorKind == 15) rumorTags.add(listOf("p", rumorPTag ?: recipientPubkeyHex))
         rumorTags.addAll(replyTags)
 
         val now = createdAt
@@ -140,7 +140,7 @@ object Nip17 {
             // Parse rumor
             val rumorObj = json.parseToJsonElement(rumorJson).jsonObject
             val kind = rumorObj["kind"]?.jsonPrimitive?.content?.toIntOrNull()
-            if (kind != 14 && kind != 7) return null
+            if (kind != 14 && kind != 7 && kind != 15) return null
 
             val tags = rumorObj["tags"]?.jsonArray?.map { tagArr ->
                 tagArr.jsonArray.map { it.jsonPrimitive.content }
@@ -179,7 +179,7 @@ object Nip17 {
 
         // Layer 1: Build unsigned rumor (id but no sig)
         val rumorTags = mutableListOf<List<String>>()
-        if (rumorKind == 14) rumorTags.add(listOf("p", rumorPTag ?: recipientPubkeyHex))
+        if (rumorKind == 14 || rumorKind == 15) rumorTags.add(listOf("p", rumorPTag ?: recipientPubkeyHex))
         rumorTags.addAll(replyTags)
 
         val now = createdAt
@@ -269,7 +269,7 @@ object Nip17 {
             // Parse rumor
             val rumorObj = json.parseToJsonElement(rumorJson).jsonObject
             val kind = rumorObj["kind"]?.jsonPrimitive?.content?.toIntOrNull()
-            if (kind != 14 && kind != 7) return null
+            if (kind != 14 && kind != 7 && kind != 15) return null
 
             val tags = rumorObj["tags"]?.jsonArray?.map { tagArr ->
                 tagArr.jsonArray.map { it.jsonPrimitive.content }
@@ -323,7 +323,7 @@ object Nip17 {
         createdAt: Long = System.currentTimeMillis() / 1000
     ): Rumor {
         val tags = mutableListOf<List<String>>()
-        if (kind == 14 && pTag != null) tags.add(listOf("p", pTag))
+        if ((kind == 14 || kind == 15) && pTag != null) tags.add(listOf("p", pTag))
         tags.addAll(replyTags)
         return Rumor(senderPubkeyHex, createdAt, kind, message, tags)
     }
@@ -333,6 +333,8 @@ object Nip17 {
      * A reaction has an e-tag pointing to the target message and short emoji content.
      */
     fun isReaction(rumor: Rumor): Boolean = rumor.kind == 7
+
+    fun isFileMessage(rumor: Rumor): Boolean = rumor.kind == 15
 
     /**
      * Extract all conversation participants from a rumor, excluding [myPubkey].

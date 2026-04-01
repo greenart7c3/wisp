@@ -7,9 +7,11 @@ import android.app.Application
 import android.webkit.MimeTypeMap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import android.graphics.BitmapFactory
 import com.wisp.app.nostr.ClientMessage
 import com.wisp.app.nostr.DmMessage
 import com.wisp.app.nostr.DmReaction
+import com.wisp.app.nostr.EncryptedMedia
 import com.wisp.app.nostr.Filter
 import com.wisp.app.nostr.Nip13
 import com.wisp.app.nostr.Nip17
@@ -256,6 +258,9 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
                         val replyToId = rumor.tags.firstOrNull { it.size >= 2 && it[0] == "e" && it.any { v -> v == "reply" } }?.get(1)
                         val rumorId = Nip17.computeRumorId(rumor)
                         val emojiMap = com.wisp.app.nostr.Nip30.parseEmojiTags(rumor.tags)
+                        val fileMetadata = if (Nip17.isFileMessage(rumor)) {
+                            com.wisp.app.nostr.EncryptedMedia.parseKind15Tags(rumor.tags, rumor.content)
+                        } else null
                         val msg = DmMessage(
                             id = "${wrap.event.id}:${rumor.createdAt}",
                             senderPubkey = rumor.pubkey,
@@ -267,6 +272,7 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
                             replyToId = replyToId,
                             participants = pList,
                             emojiMap = emojiMap,
+                            encryptedFileMetadata = fileMetadata,
                             debugGiftWrapJson = wrap.event.toJson(),
                             debugRumorJson = Nip17.rumorToJson(rumor)
                         )
@@ -295,25 +301,197 @@ class DmConversationViewModel(app: Application) : AndroidViewModel(app) {
         _sendError.value = null
     }
 
-    fun uploadMedia(uris: List<Uri>, contentResolver: ContentResolver, signer: NostrSigner? = null) {
-        viewModelScope.launch {
+    fun uploadMedia(uris: List<Uri>, contentResolver: ContentResolver, relayPool: RelayPool, signer: NostrSigner? = null) {
+        viewModelScope.launch(Dispatchers.Default) {
             val total = uris.size
             for ((index, uri) in uris.withIndex()) {
                 try {
-                    _uploadProgress.value = if (total > 1) "Uploading ${index + 1}/$total..." else "Uploading..."
+                    _uploadProgress.value = if (total > 1) "Encrypting & uploading ${index + 1}/$total..." else "Encrypting & uploading..."
                     val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
                         ?: throw Exception("Cannot read file")
                     val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
-                    val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "bin"
-                    val url = blossomRepo.uploadMedia(bytes, mimeType, ext, signer)
-                    val current = _messageText.value
-                    _messageText.value = if (current.isBlank()) url else "$current\n$url"
+
+                    // Compute image dimensions if applicable
+                    val dimensions = if (mimeType.startsWith("image/")) {
+                        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                        if (opts.outWidth > 0 && opts.outHeight > 0) "${opts.outWidth}x${opts.outHeight}" else null
+                    } else null
+
+                    val result = blossomRepo.uploadEncryptedMedia(bytes, mimeType, signer)
+                    sendFileMessage(result, mimeType, dimensions, bytes.size.toLong(), relayPool, signer)
                 } catch (e: Exception) {
                     _sendError.value = "Upload failed: ${e.message}"
                     break
                 }
             }
             _uploadProgress.value = null
+        }
+    }
+
+    /**
+     * Send a Kind 15 encrypted file message to all conversation participants + self.
+     */
+    private suspend fun sendFileMessage(
+        uploadResult: BlossomRepository.EncryptedUploadResult,
+        mimeType: String,
+        dimensions: String?,
+        originalSize: Long,
+        relayPool: RelayPool,
+        signer: NostrSigner? = null
+    ) {
+        val fileTags = EncryptedMedia.buildKind15Tags(
+            mimeType = mimeType,
+            keyHex = uploadResult.keyHex,
+            nonceHex = uploadResult.nonceHex,
+            encryptedHash = uploadResult.encryptedSha256Hex,
+            originalHash = uploadResult.originalSha256Hex,
+            size = originalSize,
+            dimensions = dimensions
+        )
+
+        val dmPowEnabled = powPrefs?.isDmPowEnabled() == true
+        val dmDifficulty = if (dmPowEnabled) powPrefs?.getDmDifficulty() ?: 0 else 0
+        val rumorCreatedAt = System.currentTimeMillis() / 1000
+
+        val rumor = Nip17.buildRumor(
+            senderPubkeyHex = signer?.pubkeyHex ?: keyRepo.getKeypair()?.pubkey?.toHex() ?: return,
+            message = uploadResult.url,
+            pTag = peerPubkey,
+            replyTags = fileTags,
+            kind = 15,
+            createdAt = rumorCreatedAt
+        )
+        val rumorId = Nip17.computeRumorId(rumor)
+
+        if (signer != null) {
+            // Remote signer path
+            val recipientDmRelays = fetchRecipientDmRelays(relayPool)
+            val deliveryRelays = resolveRecipientRelaysWithSource(recipientDmRelays, relayPool).urls
+
+            for (recipient in participants) {
+                val wrap = Nip17.createGiftWrapRemote(
+                    signer = signer,
+                    recipientPubkeyHex = recipient,
+                    message = uploadResult.url,
+                    replyTags = fileTags,
+                    rumorPTag = peerPubkey,
+                    rumorKind = 15,
+                    targetDifficulty = if (recipient == peerPubkey) dmDifficulty else 0,
+                    createdAt = rumorCreatedAt
+                )
+                val recipientRelays = if (recipient == peerPubkey) {
+                    deliveryRelays
+                } else {
+                    val dmRelays = fetchRelaysForParticipant(recipient, relayPool)
+                    dmRelays.ifEmpty { resolveRelaysForParticipant(recipient, relayPool) }
+                }
+                sendToDeliveryRelays(relayPool, recipientRelays, ClientMessage.event(wrap))
+            }
+
+            val selfWrap = Nip17.createGiftWrapRemote(
+                signer = signer,
+                recipientPubkeyHex = signer.pubkeyHex,
+                message = uploadResult.url,
+                replyTags = fileTags,
+                rumorPTag = peerPubkey,
+                rumorKind = 15,
+                targetDifficulty = dmDifficulty,
+                createdAt = rumorCreatedAt
+            )
+            val selfMsg = ClientMessage.event(selfWrap)
+            if (relayPool.hasDmRelays()) relayPool.sendToDmRelays(selfMsg) else relayPool.sendToWriteRelays(selfMsg)
+
+            val fileMetadata = EncryptedMedia.EncryptedFileMetadata(
+                fileUrl = uploadResult.url,
+                mimeType = mimeType,
+                algorithm = EncryptedMedia.ALGORITHM,
+                keyHex = uploadResult.keyHex,
+                nonceHex = uploadResult.nonceHex,
+                encryptedHash = uploadResult.encryptedSha256Hex,
+                originalHash = uploadResult.originalSha256Hex,
+                size = originalSize,
+                dimensions = dimensions,
+                blurhash = null
+            )
+            val dmMsg = DmMessage(
+                id = "${selfWrap.id}:$rumorCreatedAt",
+                senderPubkey = signer.pubkeyHex,
+                content = uploadResult.url,
+                createdAt = rumorCreatedAt,
+                giftWrapId = selfWrap.id,
+                rumorId = rumorId,
+                participants = participants,
+                encryptedFileMetadata = fileMetadata
+            )
+            dmRepo?.addMessage(dmMsg, conversationKey)
+            dmRepo?.markGiftWrapSeen(selfWrap.id, dmMsg.id)
+        } else {
+            // Local signer path
+            val keypair = keyRepo.getKeypair() ?: return
+            val recipientDmRelays = fetchRecipientDmRelays(relayPool)
+            val deliveryRelays = resolveRecipientRelaysWithSource(recipientDmRelays, relayPool).urls
+
+            for (recipient in participants) {
+                val wrap = Nip17.createGiftWrap(
+                    senderPrivkey = keypair.privkey,
+                    senderPubkey = keypair.pubkey,
+                    recipientPubkey = recipient.hexToByteArray(),
+                    message = uploadResult.url,
+                    replyTags = fileTags,
+                    rumorPTag = peerPubkey,
+                    rumorKind = 15,
+                    targetDifficulty = if (recipient == peerPubkey) dmDifficulty else 0,
+                    createdAt = rumorCreatedAt
+                )
+                val recipientRelays = if (recipient == peerPubkey) {
+                    deliveryRelays
+                } else {
+                    val dmRelays = fetchRelaysForParticipant(recipient, relayPool)
+                    dmRelays.ifEmpty { resolveRelaysForParticipant(recipient, relayPool) }
+                }
+                sendToDeliveryRelays(relayPool, recipientRelays, ClientMessage.event(wrap))
+            }
+
+            val selfWrap = Nip17.createGiftWrap(
+                senderPrivkey = keypair.privkey,
+                senderPubkey = keypair.pubkey,
+                recipientPubkey = keypair.pubkey,
+                message = uploadResult.url,
+                replyTags = fileTags,
+                rumorPTag = peerPubkey,
+                rumorKind = 15,
+                targetDifficulty = dmDifficulty,
+                createdAt = rumorCreatedAt
+            )
+            val selfMsg = ClientMessage.event(selfWrap)
+            if (relayPool.hasDmRelays()) relayPool.sendToDmRelays(selfMsg) else relayPool.sendToWriteRelays(selfMsg)
+
+            val senderPubkeyHex = keypair.pubkey.toHex()
+            val fileMetadata = EncryptedMedia.EncryptedFileMetadata(
+                fileUrl = uploadResult.url,
+                mimeType = mimeType,
+                algorithm = EncryptedMedia.ALGORITHM,
+                keyHex = uploadResult.keyHex,
+                nonceHex = uploadResult.nonceHex,
+                encryptedHash = uploadResult.encryptedSha256Hex,
+                originalHash = uploadResult.originalSha256Hex,
+                size = originalSize,
+                dimensions = dimensions,
+                blurhash = null
+            )
+            val dmMsg = DmMessage(
+                id = "${selfWrap.id}:$rumorCreatedAt",
+                senderPubkey = senderPubkeyHex,
+                content = uploadResult.url,
+                createdAt = rumorCreatedAt,
+                giftWrapId = selfWrap.id,
+                rumorId = rumorId,
+                participants = participants,
+                encryptedFileMetadata = fileMetadata
+            )
+            dmRepo?.addMessage(dmMsg, conversationKey)
+            dmRepo?.markGiftWrapSeen(selfWrap.id, dmMsg.id)
         }
     }
 

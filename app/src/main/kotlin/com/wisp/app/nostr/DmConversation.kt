@@ -33,6 +33,8 @@ data class DmMessage(
     val zaps: List<DmZap> = emptyList(),
     /** Emoji shortcode → URL map from the rumor's emoji tags (NIP-30). */
     val emojiMap: Map<String, String> = emptyMap(),
+    /** Encrypted file metadata for Kind 15 file messages. Null for regular text messages. */
+    val encryptedFileMetadata: EncryptedMedia.EncryptedFileMetadata? = null,
     /** Raw gift wrap event JSON (kind 1059) — for debug inspection only. */
     val debugGiftWrapJson: String? = null,
     /** Decrypted rumor JSON — for debug inspection only. */

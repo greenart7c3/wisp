@@ -47,6 +47,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -59,9 +60,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.LruCache
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
 import com.wisp.app.nostr.DmMessage
 import com.wisp.app.nostr.DmReaction
+import com.wisp.app.nostr.EncryptedMedia
 import com.wisp.app.repo.EventRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.Request
 import com.wisp.app.ui.theme.WispThemeColors
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -187,17 +197,25 @@ fun DmBubble(
                         Spacer(Modifier.height(6.dp))
                     }
 
-                    RichContent(
-                        content = message.content,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = textColor,
-                        linkColor = textColor,
-                        emojiMap = resolvedEmojis + message.emojiMap,
-                        eventRepo = eventRepo,
-                        onProfileClick = onProfileClick,
-                        onNoteClick = onNoteClick,
-                        noteActions = noteActions
-                    )
+                    if (message.encryptedFileMetadata != null) {
+                        EncryptedMediaContent(
+                            metadata = message.encryptedFileMetadata,
+                            messageId = message.rumorId.ifEmpty { message.id },
+                            tintColor = textColor
+                        )
+                    } else {
+                        RichContent(
+                            content = message.content,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = textColor,
+                            linkColor = textColor,
+                            emojiMap = resolvedEmojis + message.emojiMap,
+                            eventRepo = eventRepo,
+                            onProfileClick = onProfileClick,
+                            onNoteClick = onNoteClick,
+                            noteActions = noteActions
+                        )
+                    }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -556,5 +574,105 @@ private val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
 
 private fun formatTime(epoch: Long): String {
     return timeFormat.format(Date(epoch * 1000))
+}
+
+/** In-memory LRU cache for decrypted media bitmaps. ~32 MB max. */
+private val decryptedBitmapCache = LruCache<String, Bitmap>(32)
+
+private val mediaHttpClient by lazy {
+    com.wisp.app.relay.HttpClientFactory.createHttpClient(
+        connectTimeoutSeconds = 15,
+        readTimeoutSeconds = 60,
+        writeTimeoutSeconds = 15
+    )
+}
+
+@Composable
+private fun EncryptedMediaContent(
+    metadata: EncryptedMedia.EncryptedFileMetadata,
+    messageId: String,
+    tintColor: androidx.compose.ui.graphics.Color
+) {
+    val isImage = metadata.mimeType.startsWith("image/")
+
+    if (isImage) {
+        var bitmap by remember(messageId) { mutableStateOf(decryptedBitmapCache.get(messageId)) }
+        var loading by remember(messageId) { mutableStateOf(bitmap == null) }
+        var error by remember(messageId) { mutableStateOf<String?>(null) }
+
+        LaunchedEffect(messageId) {
+            if (bitmap != null) return@LaunchedEffect
+            loading = true
+            try {
+                val decrypted = withContext(Dispatchers.IO) {
+                    val request = Request.Builder().url(metadata.fileUrl).build()
+                    val response = mediaHttpClient.newCall(request).execute()
+                    if (!response.isSuccessful) throw Exception("HTTP ${response.code}")
+                    val encryptedBytes = response.body?.bytes() ?: throw Exception("Empty response")
+                    EncryptedMedia.decryptFile(encryptedBytes, metadata.keyHex, metadata.nonceHex)
+                }
+                val bmp = BitmapFactory.decodeByteArray(decrypted, 0, decrypted.size)
+                if (bmp != null) {
+                    decryptedBitmapCache.put(messageId, bmp)
+                    bitmap = bmp
+                } else {
+                    error = "Could not decode image"
+                }
+            } catch (e: Exception) {
+                error = e.message ?: "Decryption failed"
+            } finally {
+                loading = false
+            }
+        }
+
+        when {
+            loading -> {
+                Box(
+                    modifier = Modifier
+                        .size(200.dp, 150.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(tintColor.copy(alpha = 0.1f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Decrypting...",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = tintColor.copy(alpha = 0.6f)
+                    )
+                }
+            }
+            error != null -> {
+                Text(
+                    "Failed to load media",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tintColor.copy(alpha = 0.6f)
+                )
+            }
+            bitmap != null -> {
+                Image(
+                    bitmap = bitmap!!.asImageBitmap(),
+                    contentDescription = "Encrypted image",
+                    modifier = Modifier
+                        .widthIn(max = 256.dp)
+                        .clip(RoundedCornerShape(8.dp)),
+                    contentScale = androidx.compose.ui.layout.ContentScale.FillWidth
+                )
+            }
+        }
+    } else {
+        // Non-image file: show type and size
+        val sizeText = metadata.size?.let { bytes ->
+            when {
+                bytes >= 1_048_576 -> "%.1f MB".format(bytes / 1_048_576.0)
+                bytes >= 1024 -> "%.0f KB".format(bytes / 1024.0)
+                else -> "$bytes B"
+            }
+        } ?: ""
+        Text(
+            text = "${metadata.mimeType} $sizeText",
+            style = MaterialTheme.typography.bodySmall,
+            color = tintColor.copy(alpha = 0.7f)
+        )
+    }
 }
 

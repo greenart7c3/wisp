@@ -150,7 +150,7 @@ fun DmConversationScreen(
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia()
     ) { uris ->
-        if (uris.isNotEmpty()) viewModel.uploadMedia(uris, context.contentResolver, signer)
+        if (uris.isNotEmpty()) viewModel.uploadMedia(uris, context.contentResolver, relayPool, signer)
     }
 
     // Auto-scroll to bottom when new messages arrive

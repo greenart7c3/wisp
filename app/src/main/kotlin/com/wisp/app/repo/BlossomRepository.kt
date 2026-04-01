@@ -3,6 +3,7 @@ package com.wisp.app.repo
 import android.content.Context
 import android.content.SharedPreferences
 import com.wisp.app.nostr.Blossom
+import com.wisp.app.nostr.EncryptedMedia
 import com.wisp.app.nostr.NostrEvent
 import com.wisp.app.nostr.NostrSigner
 import kotlinx.coroutines.Dispatchers
@@ -146,6 +147,91 @@ class BlossomRepository(private val context: Context, pubkeyHex: String? = null)
             throw Exception("Upload failed: ${response.code} ${response.message}")
         }
         throw Exception("Upload failed")
+    }
+
+    data class EncryptedUploadResult(
+        val url: String,
+        val keyHex: String,
+        val nonceHex: String,
+        val originalSha256Hex: String,
+        val encryptedSha256Hex: String,
+        val originalSize: Long
+    )
+
+    /**
+     * Encrypt a file with AES-256-GCM and upload the encrypted blob to Blossom.
+     * Always uses /upload (not /media) since media processing would corrupt the ciphertext.
+     */
+    suspend fun uploadEncryptedMedia(
+        fileBytes: ByteArray,
+        mimeType: String,
+        signer: NostrSigner? = null
+    ): EncryptedUploadResult = withContext(Dispatchers.IO) {
+        val encrypted = EncryptedMedia.encryptFile(fileBytes)
+        val sha256Hex = encrypted.encryptedSha256Hex
+        val authHeader = if (signer != null) {
+            Blossom.createUploadAuth(signer, sha256Hex)
+        } else {
+            val keypair = keyRepo.getKeypair() ?: throw IllegalStateException("Not logged in")
+            Blossom.createUploadAuth(keypair.privkey, keypair.pubkey, sha256Hex)
+        }
+        val body = encrypted.encryptedBytes.toRequestBody("application/octet-stream".toMediaType())
+
+        val serverList = loadServers().map { url ->
+            if (url.trimEnd('/').equals("https://nostr.build", ignoreCase = true)) {
+                "https://blossom.band"
+            } else url
+        }
+        val candidates = (serverList + Blossom.DEFAULT_SERVER).distinct()
+
+        var lastException: Exception? = null
+        for (server in candidates) {
+            try {
+                val url = uploadToServerRaw(server, body, authHeader)
+                return@withContext EncryptedUploadResult(
+                    url = url,
+                    keyHex = encrypted.keyHex,
+                    nonceHex = encrypted.nonceHex,
+                    originalSha256Hex = encrypted.originalSha256Hex,
+                    encryptedSha256Hex = encrypted.encryptedSha256Hex,
+                    originalSize = fileBytes.size.toLong()
+                )
+            } catch (e: Exception) {
+                lastException = e
+            }
+        }
+        throw lastException ?: Exception("Upload failed: no servers available")
+    }
+
+    /**
+     * Upload directly to /upload endpoint only (no /media fallback).
+     * Used for encrypted blobs where media processing would corrupt the data.
+     */
+    private fun uploadToServerRaw(
+        server: String,
+        body: okhttp3.RequestBody,
+        authHeader: String
+    ): String {
+        val url = server.trimEnd('/') + "/upload"
+        val request = Request.Builder()
+            .url(url)
+            .put(body)
+            .header("Authorization", authHeader)
+            .header("Content-Type", "application/octet-stream")
+            .build()
+
+        val response = httpClient.newCall(request).execute()
+        if (response.isSuccessful) {
+            val responseBody = response.body?.string()
+                ?: throw Exception("Empty response")
+            val responseJson = json.parseToJsonElement(responseBody)
+            val urlField = (responseJson as? kotlinx.serialization.json.JsonObject)
+                ?.get("url")
+                ?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+                ?: throw Exception("No url in response")
+            return urlField
+        }
+        throw Exception("Upload failed: ${response.code} ${response.message}")
     }
 
     companion object {
