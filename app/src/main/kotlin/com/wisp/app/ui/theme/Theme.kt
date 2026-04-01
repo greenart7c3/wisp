@@ -16,6 +16,7 @@ import androidx.core.graphics.ColorUtils
 
 val LocalWispColors = androidx.compose.runtime.staticCompositionLocalOf {
     WispColors(
+        backgroundColor = Color.Unspecified,
         zapColor = Color.Unspecified,
         repostColor = Color.Unspecified,
         bookmarkColor = Color.Unspecified,
@@ -24,6 +25,7 @@ val LocalWispColors = androidx.compose.runtime.staticCompositionLocalOf {
 }
 
 data class WispColors(
+    val backgroundColor: Color,
     val zapColor: Color,
     val repostColor: Color,
     val bookmarkColor: Color,
@@ -31,6 +33,7 @@ data class WispColors(
 )
 
 object WispThemeColors {
+    val backgroundColor: Color @Composable get() = LocalWispColors.current.backgroundColor
     val zapColor: Color @Composable get() = LocalWispColors.current.zapColor
     val repostColor: Color @Composable get() = LocalWispColors.current.repostColor
     val bookmarkColor: Color @Composable get() = LocalWispColors.current.bookmarkColor
@@ -159,6 +162,7 @@ fun WispTheme(
     val wispColors = if (isDarkTheme) {
         if (isCustomTheme) {
             WispColors(
+                backgroundColor = Color(0xFF131215),
                 zapColor = accentColor,
                 repostColor = Color(0xFF4CAF50),
                 bookmarkColor = accentColor,
@@ -167,6 +171,7 @@ fun WispTheme(
         } else {
             val colors = themePreset.dark
             WispColors(
+                backgroundColor = colors.background,
                 zapColor = colors.zapColor,
                 repostColor = colors.repostColor,
                 bookmarkColor = colors.bookmarkColor,
@@ -176,6 +181,7 @@ fun WispTheme(
     } else {
         if (isCustomTheme) {
             WispColors(
+                backgroundColor = Color(0xFFECECEC),
                 zapColor = Color(0xFFB85C00),
                 repostColor = Color(0xFF2E7D32),
                 bookmarkColor = Color(0xFFB85C00),
@@ -184,6 +190,7 @@ fun WispTheme(
         } else {
             val colors = themePreset.light
             WispColors(
+                backgroundColor = colors.background,
                 zapColor = colors.zapColor,
                 repostColor = colors.repostColor,
                 bookmarkColor = colors.bookmarkColor,

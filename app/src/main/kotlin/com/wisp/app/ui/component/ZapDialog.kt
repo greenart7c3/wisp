@@ -81,14 +81,18 @@ import androidx.compose.ui.window.DialogProperties
 import com.wisp.app.R
 import com.wisp.app.repo.ZapPreferences
 import com.wisp.app.repo.ZapPreset
+import com.wisp.app.ui.theme.WispThemeColors
 import kotlin.math.sin
 import kotlin.random.Random
 
-private val LightningYellow = Color(0xFFFFD700)
-private val LightningOrange = Color(0xFFFF9800)
-private val LightningAmber = Color(0xFFFFC107)
-private val LightningDark = Color(0xFFE65100)
-private val BoltGlow = Color(0x40FFD700)
+private val LightningYellow: Color
+    @Composable get() = WispThemeColors.zapColor
+
+private val LightningOrange: Color
+    @Composable get() = WispThemeColors.zapColor
+
+private val LightningAmber: Color
+    @Composable get() = WispThemeColors.zapColor.copy(alpha = 0.7f)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -147,7 +151,7 @@ fun ZapDialog(
                 .fillMaxWidth()
                 .padding(horizontal = 24.dp),
             shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surface,
+            color = WispThemeColors.backgroundColor,
             tonalElevation = 8.dp
         ) {
             Box {
@@ -527,6 +531,8 @@ private fun AnimatedBoltHeader() {
         label = "boltScale"
     )
 
+    val zapColor = WispThemeColors.zapColor
+
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier.size(64.dp)
@@ -539,8 +545,8 @@ private fun AnimatedBoltHeader() {
                 .background(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            LightningYellow.copy(alpha = 0.4f),
-                            LightningOrange.copy(alpha = 0.1f),
+                            zapColor.copy(alpha = 0.4f),
+                            zapColor.copy(alpha = 0.1f),
                             Color.Transparent
                         )
                     ),
@@ -552,7 +558,7 @@ private fun AnimatedBoltHeader() {
         Icon(
             painter = painterResource(R.drawable.ic_bolt),
             contentDescription = null,
-            tint = LightningYellow,
+            tint = zapColor,
             modifier = Modifier
                 .size(30.dp)
                 .scale(boltScale)
@@ -574,6 +580,8 @@ private fun LightningBackground(modifier: Modifier = Modifier) {
         label = "phase"
     )
 
+    val zapColor = WispThemeColors.zapColor
+
     // Stable random values for bolt positions
     val boltData = remember {
         List(5) { i ->
@@ -593,7 +601,7 @@ private fun LightningBackground(modifier: Modifier = Modifier) {
         drawRect(
             brush = Brush.verticalGradient(
                 colors = listOf(
-                    LightningYellow.copy(alpha = 0.03f),
+                    zapColor.copy(alpha = 0.03f),
                     Color.Transparent
                 ),
                 startY = 0f,
@@ -611,7 +619,7 @@ private fun LightningBackground(modifier: Modifier = Modifier) {
             drawMiniBolt(
                 center = Offset(cx, cy),
                 size = boltSize,
-                color = LightningYellow.copy(alpha = animatedAlpha)
+                color = zapColor.copy(alpha = animatedAlpha)
             )
         }
     }
