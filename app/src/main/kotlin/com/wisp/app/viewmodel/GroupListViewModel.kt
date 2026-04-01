@@ -97,6 +97,22 @@ class GroupListViewModel(app: Application) : AndroidViewModel(app) {
         sendGroupReqs(relayUrl, groupId, since)
     }
 
+    /** Re-subscribe to all groups with notifications enabled after a relay reconnect.
+     *  Clears the subscribedGroups guard so subscriptions are re-sent fresh. */
+    fun resubscribeNotifiedGroups() {
+        val repo = groupRepo ?: return
+        val notified = repo.getNotifiedGroupKeys()
+        if (notified.isEmpty()) return
+        // Clear the guard so subscribeToGroup() will re-send REQs
+        for ((relayUrl, groupId) in notified) {
+            subscribedGroups.remove("$relayUrl|$groupId")
+        }
+        Log.d("GroupListVM", "[resubscribe] re-subscribing ${notified.size} notified groups after reconnect")
+        for ((relayUrl, groupId) in notified) {
+            subscribeToGroup(relayUrl, groupId)
+        }
+    }
+
     /** Send all 6 group subscription REQs without touching the subscribedGroups guard.
      *  When [since] is set, messages/reactions/zaps use it to skip already-persisted events.
      *  Metadata, admins, and members are replaceable — always fetched fresh. */
