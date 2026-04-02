@@ -109,6 +109,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -846,6 +847,36 @@ fun ComposeScreen(
                                 .fillMaxWidth()
                                 .padding(vertical = 4.dp)
                         ) {
+                            // Poll type selector (Standard / Zap)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp)
+                                    .clip(RoundedCornerShape(50))
+                                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                listOf(false to "Standard" , true to "Zap").forEach { (isZap, label) ->
+                                    val selected = isZapPoll == isZap
+                                    Surface(
+                                        shape = RoundedCornerShape(50),
+                                        color = if (selected) MaterialTheme.colorScheme.primaryContainer
+                                               else Color.Transparent,
+                                        contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                                                       else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable { if (!selected) viewModel.toggleZapPoll() }
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            textAlign = TextAlign.Center,
+                                            modifier = Modifier.padding(vertical = 8.dp)
+                                        )
+                                    }
+                                }
+                            }
                             pollOptions.forEachIndexed { index, option ->
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -883,13 +914,7 @@ fun ComposeScreen(
                                     }
                                 }
                                 Spacer(Modifier.weight(1f))
-                                FilterChip(
-                                    selected = isZapPoll,
-                                    onClick = { viewModel.toggleZapPoll() },
-                                    label = { Text(if (isZapPoll) "Zap Poll" else "Free Poll") }
-                                )
                                 if (!isZapPoll) {
-                                    Spacer(Modifier.width(8.dp))
                                     FilterChip(
                                         selected = pollType == Nip88.PollType.MULTIPLECHOICE,
                                         onClick = { viewModel.togglePollType() },
