@@ -22,6 +22,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.wisp.app.R
 import com.wisp.app.relay.HttpClientFactory
@@ -35,23 +36,40 @@ import kotlinx.coroutines.launch
 fun FullScreenVideoPlayer(
     videoUrl: String,
     startPositionMs: Long = 0L,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    existingPlayer: ExoPlayer? = null,
+    onMinimizeToPip: ((ExoPlayer, Long) -> Unit)? = null
 ) {
     val context = LocalContext.current
 
     DisposableEffect(videoUrl) {
         val activity = context.findActivity() ?: return@DisposableEffect onDispose {}
 
-        val exoPlayer = HttpClientFactory.createExoPlayer(context).apply {
+        val ownsPlayer = existingPlayer == null
+        val exoPlayer = existingPlayer ?: HttpClientFactory.createExoPlayer(context).apply {
             setMediaItem(MediaItem.fromUri(Uri.parse(videoUrl)))
             prepare()
             seekTo(startPositionMs)
             playWhenReady = true
         }
 
+        var minimizedToPip = false
+
+        fun minimizeToPip() {
+            if (onMinimizeToPip != null && !minimizedToPip) {
+                minimizedToPip = true
+                onMinimizeToPip(exoPlayer, exoPlayer.currentPosition)
+            }
+        }
+
         val dialog = Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
         dialog.setCancelable(true)
-        dialog.setOnDismissListener { onDismiss() }
+        dialog.setOnDismissListener {
+            if (onMinimizeToPip != null && !minimizedToPip) {
+                minimizeToPip()
+            }
+            onDismiss()
+        }
 
         val root = FrameLayout(activity)
 
@@ -88,6 +106,13 @@ fun FullScreenVideoPlayer(
             }
         }
 
+        if (onMinimizeToPip != null) {
+            buttonBar.addView(makeButton(R.drawable.ic_pip, "Mini player") {
+                minimizeToPip()
+                dialog.dismiss()
+            })
+        }
+
         buttonBar.addView(makeButton(R.drawable.ic_download, "Download") {
             CoroutineScope(Dispatchers.Main).launch {
                 MediaDownloader.downloadMedia(activity, videoUrl)
@@ -101,6 +126,9 @@ fun FullScreenVideoPlayer(
         })
 
         buttonBar.addView(makeButton(android.R.drawable.ic_menu_close_clear_cancel, "Close") {
+            if (onMinimizeToPip != null) {
+                minimizeToPip()
+            }
             dialog.dismiss()
         })
 
@@ -118,7 +146,7 @@ fun FullScreenVideoPlayer(
         dialog.show()
 
         onDispose {
-            exoPlayer.release()
+            if (ownsPlayer) exoPlayer.release()
             if (dialog.isShowing) dialog.dismiss()
         }
     }

@@ -84,7 +84,7 @@ object PipController {
 @OptIn(UnstableApi::class)
 @Composable
 fun FloatingVideoPlayer(
-    onExpandToFullScreen: (url: String, positionMs: Long) -> Unit,
+    onExpandToFullScreen: (url: String, positionMs: Long, player: ExoPlayer, aspectRatio: Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val state by PipController.pipState.collectAsState()
@@ -165,8 +165,10 @@ fun FloatingVideoPlayer(
                 onClick = {
                     val position = pipState.player.currentPosition
                     val url = pipState.url
+                    val player = pipState.player
+                    val ratio = pipState.aspectRatio
                     PipController.pipState.value = null
-                    onExpandToFullScreen(url, position)
+                    onExpandToFullScreen(url, position, player, ratio)
                 },
                 modifier = Modifier
                     .align(Alignment.TopStart)

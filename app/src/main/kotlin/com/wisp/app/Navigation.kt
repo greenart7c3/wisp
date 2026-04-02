@@ -88,7 +88,9 @@ import com.wisp.app.ui.screen.PowSettingsScreen
 import com.wisp.app.ui.screen.OnboardingScreen
 import com.wisp.app.ui.component.AddNoteToListDialog
 import com.wisp.app.ui.component.CrashReportDialog
+import androidx.media3.exoplayer.ExoPlayer
 import com.wisp.app.ui.component.FloatingVideoPlayer
+import com.wisp.app.ui.component.PipController
 import com.wisp.app.ui.component.FullScreenVideoPlayer
 import com.wisp.app.ui.screen.OnboardingSuggestionsScreen
 import com.wisp.app.ui.screen.RelayDetailScreen
@@ -642,6 +644,8 @@ fun WispNavHost(
     val powStatus by feedViewModel.powManager.status.collectAsState()
     var pipFullScreenVideoUrl by remember { mutableStateOf<String?>(null) }
     var pipFullScreenStartPosition by remember { mutableLongStateOf(0L) }
+    var pipFullScreenPlayer by remember { mutableStateOf<ExoPlayer?>(null) }
+    var pipFullScreenAspectRatio by remember { mutableStateOf(16f / 9f) }
 
     Box(modifier = Modifier.padding(innerPadding)) {
     NavHost(
@@ -3072,7 +3076,9 @@ fun WispNavHost(
     }
 
     FloatingVideoPlayer(
-        onExpandToFullScreen = { url, positionMs ->
+        onExpandToFullScreen = { url, positionMs, player, aspectRatio ->
+            pipFullScreenPlayer = player
+            pipFullScreenAspectRatio = aspectRatio
             pipFullScreenVideoUrl = url
             pipFullScreenStartPosition = positionMs
         },
@@ -3085,7 +3091,14 @@ fun WispNavHost(
         FullScreenVideoPlayer(
             videoUrl = pipFullScreenVideoUrl!!,
             startPositionMs = pipFullScreenStartPosition,
-            onDismiss = { pipFullScreenVideoUrl = null }
+            existingPlayer = pipFullScreenPlayer,
+            onMinimizeToPip = { player, _ ->
+                PipController.enterPip(pipFullScreenVideoUrl!!, player, pipFullScreenAspectRatio)
+            },
+            onDismiss = {
+                pipFullScreenVideoUrl = null
+                pipFullScreenPlayer = null
+            }
         )
     }
 
