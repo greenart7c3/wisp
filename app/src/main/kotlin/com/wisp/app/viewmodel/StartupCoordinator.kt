@@ -778,6 +778,11 @@ class StartupCoordinator(
     }
 
     private fun subscribeLiveStreams(myPubkey: String) {
+        // Bypass dedup for live chat subs — the discovery sub and per-stream sub both
+        // receive kind 1311 events and must each reach EventRouter independently.
+        // Without this, whichever sub wins the dedup race silently drops the other copy.
+        relayPool.registerDedupBypass("live-chat-")
+
         // Subscription 1: discover live activities
         val activityFilter = Filter(kinds = listOf(30311), limit = 50)
         relayPool.sendToReadRelays(ClientMessage.req("live-activities", activityFilter))

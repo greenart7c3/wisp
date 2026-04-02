@@ -869,7 +869,13 @@ class RelayPool(private val prefs: SharedPreferences? = null) {
         ephemeralLastUsed[url] = System.currentTimeMillis()
     }
 
-    fun sendToRelayOrEphemeral(url: String, message: String, skipBadCheck: Boolean = false): Boolean {
+    fun sendToRelayOrEphemeral(
+        url: String,
+        message: String,
+        skipBadCheck: Boolean = false,
+        write: Boolean = false,
+        autoReconnect: Boolean = false
+    ): Boolean {
         ensureClientCurrent()
         if (url in blockedUrls) return false
         if (!skipBadCheck && healthTracker?.isBad(url) == true) return false
@@ -923,13 +929,17 @@ class RelayPool(private val prefs: SharedPreferences? = null) {
         var isNew = false
         val ephemeral = ephemeralRelays.computeIfAbsent(url) {
             isNew = true
-            val relay = Relay(RelayConfig(url, read = true, write = false), client, scope)
-            relay.autoReconnect = false
+            val relay = Relay(RelayConfig(url, read = true, write = write), client, scope)
+            relay.autoReconnect = autoReconnect
             wireByteTracking(relay)
             relayIndex[url] = relay
             collectMessages(relay)
             relay.connect()
             relay
+        }
+        // Upgrade existing ephemeral to writable/reconnectable if requested
+        if (!isNew && autoReconnect && !ephemeral.autoReconnect) {
+            ephemeral.autoReconnect = true
         }
         val subId = extractSubId(message)
         if (subId != null) {
@@ -1257,6 +1267,13 @@ class RelayPool(private val prefs: SharedPreferences? = null) {
         val until = relayCooldowns[url] ?: return 0
         val remaining = until - System.currentTimeMillis()
         return if (remaining > 0) (remaining / 1000).toInt() + 1 else 0
+    }
+
+    /** Disable auto-reconnect on ephemeral relays so they can be evicted naturally. */
+    fun releaseEphemeralRelays(urls: List<String>) {
+        for (url in urls) {
+            ephemeralRelays[url]?.autoReconnect = false
+        }
     }
 
     fun clearSeenEvents() {

@@ -110,11 +110,9 @@ class LiveStreamViewModel(app: Application) : AndroidViewModel(app) {
             // Prioritize relay hints (most likely to have chat), then inbox/outbox
             chatRelays = (naddrRelayHints + activityHints + inboxRelays + outboxRelays)
                 .distinct().take(10).ifEmpty { relayPool.getReadRelayUrls().take(3) }
-            // Clear pool dedup so the dedicated subscription can fetch full history
-            // (discovery sub may have already marked some event IDs as seen)
-            relayPool.clearSeenEvents()
-
-            // Subscribe to chat, reactions, zaps
+            // Subscribe to chat, reactions, zaps — use writable, auto-reconnecting
+            // ephemeral connections so we can both send and receive for the stream's
+            // full duration without losing connectivity on transient drops.
             val chatATag = listOf(aTagValue)
             val chatFilter = Filter(kinds = listOf(1311), aTags = chatATag, limit = 200)
             val reactFilter = Filter(kinds = listOf(7), aTags = chatATag, limit = 500)
@@ -125,9 +123,9 @@ class LiveStreamViewModel(app: Application) : AndroidViewModel(app) {
             val zapSubId = "live-zap-$dTag"
 
             for (url in chatRelays) {
-                relayPool.sendToRelayOrEphemeral(url, ClientMessage.req(chatSubId, chatFilter))
-                relayPool.sendToRelayOrEphemeral(url, ClientMessage.req(reactSubId, reactFilter))
-                relayPool.sendToRelayOrEphemeral(url, ClientMessage.req(zapSubId, zapFilter))
+                relayPool.sendToRelayOrEphemeral(url, ClientMessage.req(chatSubId, chatFilter), write = true, autoReconnect = true)
+                relayPool.sendToRelayOrEphemeral(url, ClientMessage.req(reactSubId, reactFilter), write = true, autoReconnect = true)
+                relayPool.sendToRelayOrEphemeral(url, ClientMessage.req(zapSubId, zapFilter), write = true, autoReconnect = true)
             }
         }
     }
@@ -234,5 +232,7 @@ class LiveStreamViewModel(app: Application) : AndroidViewModel(app) {
             relayPool.sendToRelay(url, ClientMessage.close(reactSubId))
             relayPool.sendToRelay(url, ClientMessage.close(zapSubId))
         }
+        // Release auto-reconnect so ephemeral relays can be evicted naturally
+        relayPool.releaseEphemeralRelays(chatRelays)
     }
 }
