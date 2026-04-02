@@ -180,8 +180,8 @@ internal sealed interface ContentSegment {
 }
 
 private val imageExtensions = setOf("jpg", "jpeg", "png", "gif", "webp")
-private val globalMuted = MutableStateFlow(true)
-private val activeVideoUrl = MutableStateFlow<String?>(null)
+private inline val globalMuted: MutableStateFlow<Boolean> get() = PipController.globalMuted
+private inline val activeVideoUrl: MutableStateFlow<String?> get() = PipController.activeVideoUrl
 
 private val videoExtensions = setOf("mp4", "mov", "webm")
 private val audioExtensions = setOf("mp3", "wav", "ogg", "m4a", "flac", "aac")
@@ -2041,6 +2041,38 @@ internal fun InlineVideoPlayerWithFullscreen(url: String, onFullScreen: (positio
         return
     }
 
+    // Show placeholder when this video is playing in PiP
+    val pipState by PipController.pipState.collectAsState()
+    if (pipState?.url == url) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(200.dp)
+                .clip(RoundedCornerShape(12.dp)),
+            color = MaterialTheme.colorScheme.surfaceVariant
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_pip),
+                    contentDescription = null,
+                    modifier = Modifier.size(36.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Playing in mini player",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
+
     val context = LocalContext.current
     val view = LocalView.current
     var videoAspectRatio by remember { mutableFloatStateOf(16f / 9f) }
@@ -2049,12 +2081,13 @@ internal fun InlineVideoPlayerWithFullscreen(url: String, onFullScreen: (positio
     var userPaused by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(false) }
     val exoPlayer = remember(url) {
-        HttpClientFactory.createExoPlayer(context).apply {
-            setMediaItem(MediaItem.fromUri(Uri.parse(url)))
-            prepare()
-            volume = if (globalMuted.value) 0f else 1f
-            playWhenReady = false
-        }
+        PipController.reclaimPlayer(url)
+            ?: HttpClientFactory.createExoPlayer(context).apply {
+                setMediaItem(MediaItem.fromUri(Uri.parse(url)))
+                prepare()
+                volume = if (globalMuted.value) 0f else 1f
+                playWhenReady = false
+            }
     }
 
     // Sync volume with global mute state
@@ -2080,7 +2113,10 @@ internal fun InlineVideoPlayerWithFullscreen(url: String, onFullScreen: (positio
         onDispose {
             exoPlayer.removeListener(listener)
             activeVideoUrl.compareAndSet(url, null)
-            exoPlayer.release()
+            // Only release if not handed off to PiP
+            if (PipController.pipState.value?.url != url) {
+                exoPlayer.release()
+            }
         }
     }
 
@@ -2171,6 +2207,19 @@ internal fun InlineVideoPlayerWithFullscreen(url: String, onFullScreen: (positio
                         contentDescription = "Fullscreen"
                     )
                 }
+                Spacer(Modifier.width(4.dp))
+                IconButton(
+                    onClick = {
+                        PipController.enterPip(url, exoPlayer, videoAspectRatio)
+                    },
+                    colors = buttonColors,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_pip),
+                        contentDescription = "Mini player"
+                    )
+                }
             }
         }
         // Play button overlay when video is not playing and autoplay is off
@@ -2239,6 +2288,38 @@ private fun InlineVideoPlayer(url: String, modifier: Modifier = Modifier) {
         return
     }
 
+    // Show placeholder when this video is playing in PiP
+    val pipState by PipController.pipState.collectAsState()
+    if (pipState?.url == url) {
+        Surface(
+            modifier = modifier
+                .heightIn(max = 500.dp)
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(12.dp)),
+            color = MaterialTheme.colorScheme.surfaceVariant
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_pip),
+                    contentDescription = null,
+                    modifier = Modifier.size(36.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Playing in mini player",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
+
     val context = LocalContext.current
     val view = LocalView.current
     var videoAspectRatio by remember { mutableFloatStateOf(16f / 9f) }
@@ -2247,12 +2328,13 @@ private fun InlineVideoPlayer(url: String, modifier: Modifier = Modifier) {
     var userPaused by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(false) }
     val exoPlayer = remember(url) {
-        HttpClientFactory.createExoPlayer(context).apply {
-            setMediaItem(MediaItem.fromUri(Uri.parse(url)))
-            prepare()
-            volume = if (globalMuted.value) 0f else 1f
-            playWhenReady = false
-        }
+        PipController.reclaimPlayer(url)
+            ?: HttpClientFactory.createExoPlayer(context).apply {
+                setMediaItem(MediaItem.fromUri(Uri.parse(url)))
+                prepare()
+                volume = if (globalMuted.value) 0f else 1f
+                playWhenReady = false
+            }
     }
 
     LaunchedEffect(isMuted) {
@@ -2277,7 +2359,9 @@ private fun InlineVideoPlayer(url: String, modifier: Modifier = Modifier) {
         onDispose {
             exoPlayer.removeListener(listener)
             activeVideoUrl.compareAndSet(url, null)
-            exoPlayer.release()
+            if (PipController.pipState.value?.url != url) {
+                exoPlayer.release()
+            }
         }
     }
 
