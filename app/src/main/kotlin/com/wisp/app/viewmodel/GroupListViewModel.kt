@@ -98,11 +98,7 @@ class GroupListViewModel(app: Application) : AndroidViewModel(app) {
         if (!subscribedGroups.add(key)) return  // already subscribed this session
         Log.d("GroupListVM", "[subscribe] relay=$relayUrl group=$groupId")
         pool.ensureGroupRelay(relayUrl)
-        // Use the latest persisted message timestamp as `since` to avoid re-downloading
-        // messages we already have in ObjectBox. 5-minute buffer covers relay clock skew.
-        val room = groupRepo?.getRoom(relayUrl, groupId)
-        val since = room?.lastMessageAt?.takeIf { it > 0 }?.let { it - 5 * 60 }
-        sendGroupReqs(relayUrl, groupId, since)
+        sendGroupReqs(relayUrl, groupId)
     }
 
     /** Re-subscribe to all groups with notifications enabled after a relay reconnect.
@@ -122,14 +118,14 @@ class GroupListViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Send all 6 group subscription REQs without touching the subscribedGroups guard.
-     *  When [since] is set, messages/reactions/zaps use it to skip already-persisted events.
+     *  Always fetches the last N messages/reactions/zaps (no since timestamp).
      *  Metadata, admins, and members are replaceable — always fetched fresh. */
-    private fun sendGroupReqs(relayUrl: String, groupId: String, since: Long? = null) {
+    private fun sendGroupReqs(relayUrl: String, groupId: String) {
         val pool = relayPool ?: return
         pool.sendToRelayOrEphemeral(relayUrl, ClientMessage.req(
             subscriptionId = subId("msg", groupId),
             filter = Filter(kinds = listOf(Nip29.KIND_CHAT_MESSAGE), hTags = listOf(groupId),
-                since = since, limit = if (since != null) null else 100)
+                limit = 100)
         ), skipBadCheck = true)
         pool.sendToRelayOrEphemeral(relayUrl, ClientMessage.req(
             subscriptionId = subId("meta", groupId),
@@ -146,12 +142,12 @@ class GroupListViewModel(app: Application) : AndroidViewModel(app) {
         pool.sendToRelayOrEphemeral(relayUrl, ClientMessage.req(
             subscriptionId = subId("react", groupId),
             filter = Filter(kinds = listOf(7), hTags = listOf(groupId),
-                since = since, limit = if (since != null) null else 500)
+                limit = 500)
         ), skipBadCheck = true)
         pool.sendToRelayOrEphemeral(relayUrl, ClientMessage.req(
             subscriptionId = subId("zap", groupId),
             filter = Filter(kinds = listOf(9735), hTags = listOf(groupId),
-                since = since, limit = if (since != null) null else 200)
+                limit = 200)
         ), skipBadCheck = true)
     }
 
