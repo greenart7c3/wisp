@@ -58,6 +58,7 @@ import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.collectAsState
@@ -309,8 +310,11 @@ fun FeedScreen(
     val isWalletConnected = viewModel.activeWalletProvider.hasConnection()
 
     // Set up emoji removal bridge so long-press in reaction popup can remove emojis
-    com.wisp.app.ui.component.emojiRemoveCallback = { emoji ->
-        viewModel.customEmojiRepo.removeUnicodeEmoji(emoji)
+    DisposableEffect(Unit) {
+        com.wisp.app.ui.component.emojiRemoveCallback = { emoji ->
+            viewModel.customEmojiRepo.removeUnicodeEmoji(emoji)
+        }
+        onDispose { com.wisp.app.ui.component.emojiRemoveCallback = null }
     }
 
     val noteActions = remember(userPubkey) {

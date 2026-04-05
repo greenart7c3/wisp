@@ -2584,7 +2584,7 @@ private fun SparkBackupContent(
 
     Spacer(Modifier.height(24.dp))
 
-    Box(modifier = Modifier.fillMaxWidth()) {
+    if (revealed) {
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
@@ -2619,34 +2619,33 @@ private fun SparkBackupContent(
                 }
             }
         }
-
-        // Blur overlay when not revealed
-        if (!revealed) {
-            Surface(
+    } else {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { revealed = true },
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(
                 modifier = Modifier
-                    .matchParentSize()
-                    .clickable { revealed = true },
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                shape = CardDefaults.shape
+                    .fillMaxWidth()
+                    .padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Icon(
-                        Icons.Outlined.Visibility,
-                        contentDescription = "Reveal recovery phrase",
-                        modifier = Modifier.size(32.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Tap to reveal",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                Icon(
+                    Icons.Outlined.Visibility,
+                    contentDescription = "Reveal recovery phrase",
+                    modifier = Modifier.size(32.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Tap to reveal",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }

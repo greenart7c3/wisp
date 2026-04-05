@@ -306,32 +306,20 @@ fun GalleryCard(
         Row(verticalAlignment = Alignment.CenterVertically) {
             ProfilePicture(
                 url = profile?.picture,
+                showFollowBadge = isFollowingAuthor && !isOwnEvent,
                 onClick = onProfileClick,
                 onLongPress = if (!isOwnEvent) onFollowAuthor else null
             )
             Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = displayName,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .clickable(onClick = onProfileClick)
-                            .weight(1f, fill = false)
-                    )
-                    if (isFollowingAuthor && !isOwnEvent) {
-                        Spacer(Modifier.width(4.dp))
-                        Icon(
-                            Icons.Default.Check,
-                            contentDescription = "Following",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
-                }
+                Text(
+                    text = displayName,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.clickable(onClick = onProfileClick)
+                )
                 profile?.nip05?.let { nip05 ->
                     Nip05Badge(
                         nip05 = nip05,
