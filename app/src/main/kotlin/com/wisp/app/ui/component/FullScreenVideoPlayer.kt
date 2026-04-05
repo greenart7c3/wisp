@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.net.Uri
 import android.view.Gravity
+import android.view.WindowManager
 import android.view.ViewGroup.LayoutParams
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -159,11 +160,15 @@ fun FullScreenVideoPlayer(
             insetsController.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             insetsController.hide(WindowInsetsCompat.Type.systemBars())
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
+
+        VideoMediaSession.attach(activity, exoPlayer)
 
         dialog.show()
 
         onDispose {
+            if (!minimizedToPip) VideoMediaSession.release()
             if (ownsPlayer) exoPlayer.release()
             if (dialog.isShowing) dialog.dismiss()
         }

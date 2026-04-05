@@ -43,6 +43,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import android.view.TextureView
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -72,6 +73,7 @@ object PipController {
 
     fun exitPip() {
         val state = pipState.value ?: return
+        VideoMediaSession.release()
         state.player.release()
         pipState.value = null
         activeVideoUrl.compareAndSet(state.url, null)
@@ -93,6 +95,8 @@ fun FloatingVideoPlayer(
     val state by PipController.pipState.collectAsState()
     val currentState = state
 
+    val context = LocalContext.current
+
     AnimatedVisibility(
         visible = currentState != null,
         enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
@@ -101,6 +105,11 @@ fun FloatingVideoPlayer(
     ) {
         val pipState = currentState ?: return@AnimatedVisibility
         val isMuted by PipController.globalMuted.collectAsState()
+
+        DisposableEffect(pipState.player) {
+            VideoMediaSession.attach(context, pipState.player)
+            onDispose {}
+        }
 
         LaunchedEffect(isMuted) {
             pipState.player.volume = if (isMuted) 0f else 1f
