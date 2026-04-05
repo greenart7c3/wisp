@@ -50,6 +50,13 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
 
     fun getUserStatus(pubkey: String): String? = userStatusCache[pubkey]
 
+    /** Optimistically update status in local cache before relay confirmation. */
+    fun setUserStatus(pubkey: String, status: String?) {
+        if (status.isNullOrBlank()) userStatusCache.remove(pubkey)
+        else userStatusCache[pubkey] = status
+        _statusVersion.value++
+    }
+
     /** NIP-38: process a kind 30315 user status event. Only caches "general" statuses. */
     private fun processUserStatus(event: NostrEvent) {
         val dTag = event.tags.firstOrNull { it.size >= 2 && it[0] == "d" }?.get(1)
