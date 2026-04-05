@@ -515,6 +515,9 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     /** Publish a NIP-38 user status (kind 30315). Empty string clears the status. */
     fun publishUserStatus(status: String) {
         val s = signer ?: return
+        val pubkey = pubkeyHex ?: return
+        // Optimistic local update so UI feels instant
+        eventRepo.setUserStatus(pubkey, status.ifBlank { null })
         viewModelScope.launch {
             val tags = mutableListOf(listOf("d", "general"))
             val event = s.signEvent(kind = 30315, content = status, tags = tags)

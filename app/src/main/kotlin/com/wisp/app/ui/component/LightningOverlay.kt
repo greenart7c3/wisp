@@ -47,7 +47,8 @@ fun ZapBurstEffect(
         onDispose { zapSound.release() }
     }
 
-    var particles by remember { mutableStateOf<List<BoltParticle>>(emptyList()) }
+    var bolts by remember { mutableStateOf<List<BoltParticle>>(emptyList()) }
+    var sparks by remember { mutableStateOf<List<SparkParticle>>(emptyList()) }
     val progress = remember { Animatable(0f) }
 
     val zapColor = WispThemeColors.zapColor
@@ -57,11 +58,13 @@ fun ZapBurstEffect(
     LaunchedEffect(isActive) {
         if (!isActive) return@LaunchedEffect
 
-        particles = generateBoltParticles()
+        val rng = Random(System.nanoTime())
+        bolts = generateBoltParticles(rng)
+        sparks = generateSparkParticles(rng)
         if (soundEnabled) zapSound.play()
 
         progress.snapTo(0f)
-        progress.animateTo(1f, animationSpec = tween(900, easing = FastOutSlowInEasing))
+        progress.animateTo(1f, animationSpec = tween(1100, easing = FastOutSlowInEasing))
         progress.snapTo(0f)
     }
 
@@ -72,8 +75,45 @@ fun ZapBurstEffect(
         val cx = size.width / 2f
         val cy = size.height / 2f
 
-        for (particle in particles) {
-            drawBoltParticle(particle, cx, cy, p, zapColor)
+        // Bright center flash — fills the area then fades
+        if (p < 0.25f) {
+            val flashP = p / 0.25f
+            val flashAlpha = (1f - flashP) * 0.7f
+            drawCircle(
+                brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = flashAlpha),
+                        zapColor.copy(alpha = flashAlpha * 0.6f),
+                        Color.Transparent
+                    ),
+                    center = androidx.compose.ui.geometry.Offset(cx, cy),
+                    radius = size.minDimension * 0.4f * (0.5f + flashP * 0.5f)
+                ),
+                radius = size.minDimension * 0.4f
+            )
+        }
+
+        // Expanding ring
+        if (p < 0.5f) {
+            val ringP = p / 0.5f
+            val ringRadius = 10f * density + size.minDimension * 0.45f * ringP
+            val ringAlpha = (1f - ringP) * 0.5f
+            drawCircle(
+                color = zapColor.copy(alpha = ringAlpha),
+                radius = ringRadius,
+                center = androidx.compose.ui.geometry.Offset(cx, cy),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = (4f - 3f * ringP) * density)
+            )
+        }
+
+        // Bolt particles
+        for (bolt in bolts) {
+            drawBoltParticle(bolt, cx, cy, p, zapColor)
+        }
+
+        // Spark particles — small dots that fly outward fast
+        for (spark in sparks) {
+            drawSparkParticle(spark, cx, cy, p, zapColor)
         }
     }
 }
@@ -83,11 +123,17 @@ private data class BoltParticle(
     val distance: Float,
     val boltSize: Float,
     val rotationDir: Float,
-    val delay: Float // 0..0.2 staggered start
+    val delay: Float
 )
 
-private fun generateBoltParticles(): List<BoltParticle> {
-    val rng = Random(System.nanoTime())
+private data class SparkParticle(
+    val angle: Float,
+    val distance: Float,
+    val sparkSize: Float,
+    val delay: Float
+)
+
+private fun generateBoltParticles(rng: Random): List<BoltParticle> {
     val count = rng.nextInt(5, 8)
     val baseStep = (2f * Math.PI / count).toFloat()
 
@@ -102,6 +148,18 @@ private fun generateBoltParticles(): List<BoltParticle> {
     }
 }
 
+private fun generateSparkParticles(rng: Random): List<SparkParticle> {
+    val count = rng.nextInt(12, 20)
+    return (0 until count).map {
+        SparkParticle(
+            angle = rng.nextFloat() * 2f * Math.PI.toFloat(),
+            distance = 40f + rng.nextFloat() * 35f,
+            sparkSize = 1.5f + rng.nextFloat() * 2.5f,
+            delay = rng.nextFloat() * 0.15f
+        )
+    }
+}
+
 private fun DrawScope.drawBoltParticle(
     particle: BoltParticle,
     cx: Float,
@@ -109,32 +167,23 @@ private fun DrawScope.drawBoltParticle(
     progress: Float,
     zapColor: Color
 ) {
-    // Stagger each particle start
     val localP = ((progress - particle.delay) / (1f - particle.delay)).coerceIn(0f, 1f)
     if (localP <= 0f) return
 
-    // Ease out for smooth deceleration
     val eased = 1f - (1f - localP) * (1f - localP)
-
-    // Move outward
     val dist = particle.distance * density * eased
     val px = cx + cos(particle.angle) * dist
     val py = cy + sin(particle.angle) * dist
-
-    // Scale: grow quickly then shrink
     val scale = if (localP < 0.3f) localP / 0.3f else 1f - (localP - 0.3f) / 0.7f * 0.6f
-
-    // Fade out in final third
     val alpha = if (localP > 0.6f) 1f - (localP - 0.6f) / 0.4f else 1f
 
     if (alpha <= 0f || scale <= 0f) return
 
     val boltW = particle.boltSize * density * scale
-    val boltH = boltW * (94f / 55f) // maintain ic_bolt aspect ratio
+    val boltH = boltW * (94f / 55f)
     val boltPath = icBoltPath(boltW, boltH)
 
     translate(left = px - boltW / 2f, top = py - boltH / 2f) {
-        // Glow
         drawPath(
             path = boltPath,
             color = zapColor.copy(alpha = alpha * 0.5f),
@@ -144,11 +193,40 @@ private fun DrawScope.drawBoltParticle(
                 join = androidx.compose.ui.graphics.StrokeJoin.Round
             )
         )
-        // Fill
         drawPath(path = boltPath, color = zapColor.copy(alpha = alpha * 0.9f), style = Fill)
-        // Core highlight
         drawPath(path = boltPath, color = Color.White.copy(alpha = alpha * 0.3f), style = Fill)
     }
+}
+
+private fun DrawScope.drawSparkParticle(
+    spark: SparkParticle,
+    cx: Float,
+    cy: Float,
+    progress: Float,
+    zapColor: Color
+) {
+    val localP = ((progress - spark.delay) / (1f - spark.delay)).coerceIn(0f, 1f)
+    if (localP <= 0f) return
+
+    val eased = 1f - (1f - localP) * (1f - localP) * (1f - localP) // cubic ease-out
+    val dist = spark.distance * density * eased
+    val px = cx + cos(spark.angle) * dist
+    val py = cy + sin(spark.angle) * dist
+    val alpha = if (localP > 0.5f) 1f - (localP - 0.5f) / 0.5f else 1f
+    val r = spark.sparkSize * density * (1f - localP * 0.5f)
+
+    if (alpha <= 0f) return
+
+    drawCircle(
+        color = Color.White.copy(alpha = alpha * 0.9f),
+        radius = r,
+        center = androidx.compose.ui.geometry.Offset(px, py)
+    )
+    drawCircle(
+        color = zapColor.copy(alpha = alpha * 0.4f),
+        radius = r * 2f,
+        center = androidx.compose.ui.geometry.Offset(px, py)
+    )
 }
 
 /**

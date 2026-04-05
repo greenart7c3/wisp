@@ -253,7 +253,7 @@ private fun isStandaloneUrl(content: String, matchRange: IntRange): Boolean {
     return true
 }
 
-internal fun parseContent(content: String, emojiMap: Map<String, String> = emptyMap(), imetaMap: Map<String, String> = emptyMap()): List<ContentSegment> {
+internal fun parseContent(content: String, emojiMap: Map<String, String> = emptyMap(), imetaMap: Map<String, String> = emptyMap(), trimBlankLines: Boolean = true): List<ContentSegment> {
     val segments = mutableListOf<ContentSegment>()
     var lastEnd = 0
 
@@ -356,7 +356,7 @@ internal fun parseContent(content: String, emojiMap: Map<String, String> = empty
 
     // Final pass: trim trailing blank lines from text segments that precede
     // block-level segments (links, images, embeds, etc.) to avoid extra vertical space
-    for (i in 0 until finalResult.size - 1) {
+    if (trimBlankLines) for (i in 0 until finalResult.size - 1) {
         val segment = finalResult[i]
         val next = finalResult[i + 1]
         if (segment is ContentSegment.TextSegment && next !is ContentSegment.TextSegment && next !is ContentSegment.InlineLinkSegment && next !is ContentSegment.CustomEmojiSegment) {
@@ -576,7 +576,7 @@ fun RichContent(
     noteActions: NoteActions? = null,
     modifier: Modifier = Modifier
 ) {
-    val segments = remember(content, emojiMap, imetaMap) { parseContent(content.trimEnd('\n', '\r'), emojiMap, imetaMap) }
+    val segments = remember(content, emojiMap, imetaMap, plainLinks) { parseContent(content.trimEnd('\n', '\r'), emojiMap, imetaMap, trimBlankLines = !plainLinks) }
     val profileVer = eventRepo?.profileVersion?.collectAsState()?.value ?: 0
     var fullScreenImageUrl by remember { mutableStateOf<String?>(null) }
     var fullScreenVideoUrl by remember { mutableStateOf<String?>(null) }

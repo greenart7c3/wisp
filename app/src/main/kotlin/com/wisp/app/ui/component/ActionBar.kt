@@ -211,7 +211,7 @@ fun ActionBar(
             ) {
                 ZapBurstEffect(
                     isActive = isZapAnimating,
-                    modifier = Modifier.size(120.dp)
+                    modifier = Modifier.size(160.dp)
                 )
             }
         }
