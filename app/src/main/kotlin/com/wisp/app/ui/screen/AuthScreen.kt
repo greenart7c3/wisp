@@ -32,6 +32,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -84,6 +85,17 @@ fun AuthScreen(
     var nsecVisible by remember { mutableStateOf(false) }
     val signerAvailable = remember { RemoteSignerBridge.isSignerAvailable(context) }
 
+    // Track when signer login completes so we can navigate after the composable
+    // is back to RESUMED state (activity result callbacks fire during STARTED,
+    // which causes navigateSafe() to silently drop the navigation call).
+    var signerLoginComplete by remember { mutableStateOf(false) }
+    if (signerLoginComplete) {
+        LaunchedEffect(Unit) {
+            signerLoginComplete = false
+            onAuthenticated(false)
+        }
+    }
+
     val signerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -97,7 +109,7 @@ fun AuthScreen(
             result
         }
         viewModel.loginWithSigner(pubkeyHex, pkg)
-        onAuthenticated(false)
+        signerLoginComplete = true
     }
 
     Column(
