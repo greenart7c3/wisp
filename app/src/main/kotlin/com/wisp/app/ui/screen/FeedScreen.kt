@@ -202,6 +202,7 @@ fun FeedScreen(
     val relaySourceVersion by viewModel.eventRepo.relaySourceVersion.collectAsState()
     val followList by viewModel.contactRepo.followList.collectAsState()
     val profileVersion by viewModel.eventRepo.profileVersion.collectAsState()
+    val statusVersion by viewModel.eventRepo.statusVersion.collectAsState()
     val nip05Version by viewModel.nip05Repo.version.collectAsState()
     val pollVoteVersion by viewModel.eventRepo.pollVoteVersion.collectAsState()
     val translationVersion by viewModel.translationRepo.version.collectAsState()
@@ -733,7 +734,7 @@ fun FeedScreen(
                     scope.launch { drawerState.close() }
                     onLogout()
                 },
-                userStatus = userPubkey?.let { viewModel.eventRepo.getUserStatus(it) },
+                userStatus = statusVersion.let { userPubkey?.let { viewModel.eventRepo.getUserStatus(it) } },
                 onUpdateStatus = { status ->
                     viewModel.publishUserStatus(status)
                 }
