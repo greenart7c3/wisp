@@ -169,12 +169,19 @@ fun PostCard(
         event.tags.firstOrNull { it.size >= 2 && it[0] == "client" }?.get(1)
     }
 
-    // Reply-to attribution: resolve the author name of the post being replied to
+    // Reply-to attribution: resolve the author of the event being replied to
     val replyToPubkey = remember(event.id) {
         if (!Nip10.isReply(event)) null
-        else event.tags.firstOrNull { it.size >= 2 && it[0] == "p" }?.get(1)
+        else {
+            // Use the pubkey of the actual reply target event, not the first p-tag
+            val replyTargetId = Nip10.getReplyTarget(event)
+            replyTargetId?.let { eventRepo?.getEvent(it)?.pubkey }
+                ?: event.tags.firstOrNull { it.size >= 2 && it[0] == "p" }?.get(1)
+        }
     }
-    val replyToName = remember(replyToPubkey) {
+    // Re-derive when profiles load so we don't get stuck showing hex
+    val profileVersion by eventRepo?.profileVersion?.collectAsState() ?: remember { mutableIntStateOf(0) }
+    val replyToName = remember(replyToPubkey, profileVersion) {
         replyToPubkey?.let { pk ->
             eventRepo?.getProfileData(pk)?.displayString ?: (pk.take(8) + "...")
         }

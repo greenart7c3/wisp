@@ -42,12 +42,36 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     private val eventCache = ConcurrentHashMap<String, NostrEvent>()
     private val seenEventIds = ConcurrentHashMap.newKeySet<String>()  // thread-safe dedup that doesn't evict
 
-    // NIP-38: user status cache (pubkey -> status content)
+    // NIP-38: user status cache (pubkey -> status content + timestamp for dedup)
     private val userStatusCache = ConcurrentHashMap<String, String>()
+    private val userStatusTimestamps = ConcurrentHashMap<String, Long>()
     private val _statusVersion = MutableStateFlow(0)
     val statusVersion: StateFlow<Int> = _statusVersion
 
     fun getUserStatus(pubkey: String): String? = userStatusCache[pubkey]
+
+    /** NIP-38: process a kind 30315 user status event. Only caches "general" statuses. */
+    private fun processUserStatus(event: NostrEvent) {
+        val dTag = event.tags.firstOrNull { it.size >= 2 && it[0] == "d" }?.get(1)
+        if (dTag != "general") return
+
+        // Only update if this event is newer than what we have (addressable events replace by d-tag)
+        val existingTimestamp = userStatusTimestamps[event.pubkey]
+        if (existingTimestamp != null && event.created_at < existingTimestamp) return
+
+        val expiration = event.tags.firstOrNull { it.size >= 2 && it[0] == "expiration" }?.get(1)?.toLongOrNull()
+        val now = System.currentTimeMillis() / 1000
+        if (expiration != null && expiration < now) {
+            userStatusCache.remove(event.pubkey)
+        } else if (event.content.isNotBlank()) {
+            userStatusCache[event.pubkey] = event.content
+        } else {
+            userStatusCache.remove(event.pubkey)
+        }
+        userStatusTimestamps[event.pubkey] = event.created_at
+        _statusVersion.value++
+    }
+
     private val feedList = mutableListOf<NostrEvent>()
     private val feedIds = HashSet<String>()  // O(1) dedup that doesn't evict like LruCache
 
@@ -384,26 +408,7 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
             }
             Nip88.KIND_POLL_RESPONSE -> addPollVote(event)
             7 -> addReaction(event)
-            30315 -> {
-                // NIP-38: user status — only cache "general" statuses
-                val dTag = event.tags.firstOrNull { it.size >= 2 && it[0] == "d" }?.get(1)
-                if (dTag == "general") {
-                    val expiration = event.tags.firstOrNull { it.size >= 2 && it[0] == "expiration" }?.get(1)?.toLongOrNull()
-                    val now = System.currentTimeMillis() / 1000
-                    if (expiration != null && expiration < now) {
-                        userStatusCache.remove(event.pubkey)
-                    } else {
-                        val existing = userStatusCache[event.pubkey]
-                        // Only update if this is newer (addressable events replace by d-tag)
-                        if (event.content.isNotBlank()) {
-                            userStatusCache[event.pubkey] = event.content
-                        } else {
-                            userStatusCache.remove(event.pubkey)
-                        }
-                    }
-                    _statusVersion.value++
-                }
-            }
+            30315 -> processUserStatus(event)
             9735 -> {
                 val targetId = Nip57.getZappedEventId(event)
                     ?: resolveAddressableTarget(event)
@@ -687,21 +692,7 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
             }
         }
         // NIP-38: process user status in cacheEvent path too (addEvent dedup may skip it)
-        if (event.kind == 30315) {
-            val dTag = event.tags.firstOrNull { it.size >= 2 && it[0] == "d" }?.get(1)
-            if (dTag == "general") {
-                val expiration = event.tags.firstOrNull { it.size >= 2 && it[0] == "expiration" }?.get(1)?.toLongOrNull()
-                val now = System.currentTimeMillis() / 1000
-                if (expiration != null && expiration < now) {
-                    userStatusCache.remove(event.pubkey)
-                } else if (event.content.isNotBlank()) {
-                    userStatusCache[event.pubkey] = event.content
-                } else {
-                    userStatusCache.remove(event.pubkey)
-                }
-                _statusVersion.value++
-            }
-        }
+        if (event.kind == 30315) processUserStatus(event)
         _quotedEventVersion.value++
     }
 
