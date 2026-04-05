@@ -732,6 +732,10 @@ fun FeedScreen(
                 onLogout = {
                     scope.launch { drawerState.close() }
                     onLogout()
+                },
+                userStatus = userPubkey?.let { viewModel.eventRepo.getUserStatus(it) },
+                onUpdateStatus = { status ->
+                    viewModel.publishUserStatus(status)
                 }
             )
         }

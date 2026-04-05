@@ -65,6 +65,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.material3.Surface
+import com.wisp.app.nostr.Nip10
 import com.wisp.app.nostr.Nip13
 import com.wisp.app.nostr.Nip19
 import com.wisp.app.nostr.NostrEvent
@@ -172,6 +173,24 @@ fun PostCard(
         event.tags.firstOrNull { it.size >= 2 && it[0] == "client" }?.get(1)
     }
 
+    // Reply-to attribution: resolve the author of the event being replied to
+    val replyToPubkey = remember(event.id) {
+        if (!Nip10.isReply(event)) null
+        else {
+            // Use the pubkey of the actual reply target event, not the first p-tag
+            val replyTargetId = Nip10.getReplyTarget(event)
+            replyTargetId?.let { eventRepo?.getEvent(it)?.pubkey }
+                ?: event.tags.firstOrNull { it.size >= 2 && it[0] == "p" }?.get(1)
+        }
+    }
+    // Re-derive when profiles load so we don't get stuck showing hex
+    val profileVersion by eventRepo?.profileVersion?.collectAsState() ?: remember { mutableIntStateOf(0) }
+    val replyToName = remember(replyToPubkey, profileVersion) {
+        replyToPubkey?.let { pk ->
+            eventRepo?.getProfileData(pk)?.displayString ?: (pk.take(8) + "...")
+        }
+    }
+
     val hasReactionDetails = reactionDetails.isNotEmpty() || zapDetails.isNotEmpty() || repostDetails.isNotEmpty()
     var expandedDetails by remember { mutableStateOf(false) }
     var showTranslation by remember { mutableStateOf(true) }
@@ -260,6 +279,40 @@ fun PostCard(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.clickable(onClick = onProfileClick)
                 )
+                if (replyToName != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "replying to ",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = replyToName,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.clickable {
+                                replyToPubkey?.let { onNavigateToProfile?.invoke(it) }
+                            }
+                        )
+                    }
+                }
+                // NIP-38: user status
+                val statusVersion by eventRepo?.statusVersion?.collectAsState() ?: remember { mutableIntStateOf(0) }
+                val userStatus = remember(statusVersion, event.pubkey) {
+                    eventRepo?.getUserStatus(event.pubkey)
+                }
+                if (userStatus != null) {
+                    Text(
+                        text = userStatus,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                    )
+                }
                 profile?.nip05?.let { nip05 ->
                     Nip05Badge(
                         nip05 = nip05,
