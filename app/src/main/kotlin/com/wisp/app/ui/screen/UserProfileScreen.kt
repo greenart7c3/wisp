@@ -36,7 +36,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
 
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.CurrencyBitcoin
@@ -334,6 +334,7 @@ fun UserProfileScreen(
     if (showQrDialog) {
         QrCodeDialog(
             pubkeyHex = profilePubkey,
+            avatarUrl = profile?.picture,
             onDismiss = { showQrDialog = false }
         )
     }
@@ -419,7 +420,7 @@ fun UserProfileScreen(
                         }
                     }
                     IconButton(onClick = { showQrDialog = true }) {
-                        Icon(Icons.Default.QrCode2, stringResource(R.string.cd_show_qr_code))
+                        Icon(Icons.Default.QrCodeScanner, stringResource(R.string.cd_show_qr_code))
                     }
                     var menuExpanded by remember { mutableStateOf(false) }
                     IconButton(onClick = { menuExpanded = true }) {
