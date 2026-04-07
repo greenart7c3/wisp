@@ -57,6 +57,7 @@ import com.wisp.app.nostr.NostrEvent
 import com.wisp.app.ui.component.ActionBar
 import com.wisp.app.ui.component.NoteActions
 import com.wisp.app.ui.component.PostCard
+import com.wisp.app.ui.component.RichContent
 import com.wisp.app.viewmodel.ArticleViewModel
 import kotlin.math.min
 
@@ -231,6 +232,12 @@ fun ArticleScreen(
                             is MdBlock.Image -> ArticleImage(block)
                             is MdBlock.CodeBlock -> ArticleCodeBlock(block)
                             is MdBlock.BlockQuote -> ArticleBlockQuote(block)
+                            is MdBlock.NostrEmbed -> ArticleNostrEmbed(
+                                block = block,
+                                eventRepo = eventRepo,
+                                noteActions = noteActions,
+                                onProfileClick = onProfileClick
+                            )
                             is MdBlock.HorizontalRule -> HorizontalDivider(
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
                             )
@@ -463,6 +470,22 @@ private fun ArticleBlockQuote(block: MdBlock.BlockQuote) {
     }
 }
 
+@Composable
+private fun ArticleNostrEmbed(
+    block: MdBlock.NostrEmbed,
+    eventRepo: EventRepository,
+    noteActions: NoteActions?,
+    onProfileClick: (String) -> Unit
+) {
+    RichContent(
+        content = block.content,
+        eventRepo = eventRepo,
+        onProfileClick = { onProfileClick(it) },
+        noteActions = noteActions,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+    )
+}
+
 // -- Inline formatting --
 
 @Composable
@@ -561,6 +584,24 @@ private fun formatInline(text: String): AnnotatedString {
                             i++
                         }
                     }
+                    // Inline nostr entity references
+                    text.regionMatches(i, "nostr:", 0, 6, ignoreCase = true) ||
+                    text.regionMatches(i, "nevent1", 0, 7, ignoreCase = true) ||
+                    text.regionMatches(i, "nprofile1", 0, 9, ignoreCase = true) ||
+                    text.regionMatches(i, "naddr1", 0, 6, ignoreCase = true) ||
+                    text.regionMatches(i, "npub1", 0, 5, ignoreCase = true) ||
+                    text.regionMatches(i, "note1", 0, 5, ignoreCase = true) -> {
+                        val match = nostrInlineRegex.find(text, i)
+                        if (match != null && match.range.first == i) {
+                            withStyle(SpanStyle(color = linkColor)) {
+                                append(shortenNostrEntity(match.value))
+                            }
+                            i = match.range.last + 1
+                        } else {
+                            append(text[i])
+                            i++
+                        }
+                    }
                     else -> {
                         append(text[i])
                         i++
@@ -580,9 +621,21 @@ private sealed interface MdBlock {
     data class CodeBlock(val code: String, val language: String?) : MdBlock
     data class BlockQuote(val text: String) : MdBlock
     data object HorizontalRule : MdBlock
+    data class NostrEmbed(val content: String) : MdBlock
 }
 
 private val imageLineRegex = Regex("""^!\[([^\]]*)]\((\S+?)(?:\s+"[^"]*")?\)\s*$""")
+private val nostrEntityLineRegex = Regex("""^(?:nostr:)?(?:note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]+$""", RegexOption.IGNORE_CASE)
+private val nostrInlineRegex = Regex("""(?:nostr:)?(?:note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]+""", RegexOption.IGNORE_CASE)
+
+private fun shortenNostrEntity(entity: String): String {
+    val bare = entity.removePrefix("nostr:").removePrefix("NOSTR:")
+    return when {
+        bare.startsWith("npub1", ignoreCase = true) || bare.startsWith("nprofile1", ignoreCase = true) ->
+            "@${bare.take(10)}..."
+        else -> "${bare.take(12)}..."
+    }
+}
 
 private fun parseMarkdownBlocks(content: String): List<MdBlock> {
     val blocks = mutableListOf<MdBlock>()
@@ -631,6 +684,14 @@ private fun parseMarkdownBlocks(content: String): List<MdBlock> {
                 i++
             }
 
+            // Standalone nostr entity (nevent, nprofile, naddr, note, npub)
+            nostrEntityLineRegex.matches(trimmed) -> {
+                val entity = trimmed
+                val normalized = if (!entity.startsWith("nostr:", ignoreCase = true)) "nostr:$entity" else entity
+                blocks.add(MdBlock.NostrEmbed(normalized))
+                i++
+            }
+
             // Block quote
             trimmed.startsWith(">") -> {
                 val quoteLines = mutableListOf<String>()
@@ -649,8 +710,9 @@ private fun parseMarkdownBlocks(content: String): List<MdBlock> {
                     if (l.isEmpty() || l.startsWith("#") || l.startsWith("```") ||
                         l.startsWith(">") || l.matches(Regex("""^[-*_]{3,}\s*$"""))
                     ) break
-                    // If this line is a standalone image, break so it's handled as its own block
+                    // If this line is a standalone image or nostr entity, break so it's handled as its own block
                     if (imageLineRegex.matches(l)) break
+                    if (nostrEntityLineRegex.matches(l)) break
                     paraLines.add(l)
                     i++
                 }

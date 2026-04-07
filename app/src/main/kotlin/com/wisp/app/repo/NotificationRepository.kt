@@ -71,8 +71,8 @@ class NotificationRepository(
     private val _replyReceived = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val replyReceived: SharedFlow<Unit> = _replyReceived
 
-    private val _notifReceived = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
-    val notifReceived: SharedFlow<Unit> = _notifReceived
+    private val _notifReceived = MutableSharedFlow<Int>(extraBufferCapacity = 1)
+    val notifReceived: SharedFlow<Int> = _notifReceived
 
     fun getLatestNotifTimestamp(): Long? = if (latestNotifTs > 0) latestNotifTs else null
 
@@ -242,9 +242,9 @@ class NotificationRepository(
                             // Replies get the ICQ flower effect; quotes/mentions get generic blip
                             val isReply = Nip10.getReplyTarget(event) != null
                             if (isReply) _replyReceived.tryEmit(Unit)
-                            else _notifReceived.tryEmit(Unit)
+                            else _notifReceived.tryEmit(event.kind)
                         }
-                        else -> _notifReceived.tryEmit(Unit)
+                        else -> _notifReceived.tryEmit(event.kind)
                     }
                 }
             }

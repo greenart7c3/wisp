@@ -26,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -41,12 +42,15 @@ import com.wisp.app.R
 import com.wisp.app.repo.MuteRepository
 import com.wisp.app.repo.ProfileRepository
 import com.wisp.app.ui.component.ProfilePicture
+import kotlinx.coroutines.flow.StateFlow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SafetyScreen(
     muteRepo: MuteRepository,
     profileRepo: ProfileRepository,
+    profileVersion: StateFlow<Int>,
+    fetchProfile: (String) -> Unit,
     onBack: () -> Unit,
     onChanged: () -> Unit = {}
 ) {
@@ -87,7 +91,7 @@ fun SafetyScreen(
 
             when (selectedTab) {
                 0 -> MutedWordsTab(muteRepo, onChanged)
-                1 -> MutedUsersTab(muteRepo, profileRepo, onChanged)
+                1 -> MutedUsersTab(muteRepo, profileRepo, profileVersion, fetchProfile, onChanged)
             }
         }
     }
@@ -177,10 +181,19 @@ private fun MutedWordsTab(
 private fun MutedUsersTab(
     muteRepo: MuteRepository,
     profileRepo: ProfileRepository,
+    profileVersion: StateFlow<Int>,
+    fetchProfile: (String) -> Unit,
     onChanged: () -> Unit
 ) {
     val blockedPubkeys by muteRepo.blockedPubkeys.collectAsState()
     val sorted = remember(blockedPubkeys) { blockedPubkeys.toList().sorted() }
+    val version by profileVersion.collectAsState()
+
+    LaunchedEffect(sorted) {
+        for (pubkey in sorted) {
+            if (!profileRepo.has(pubkey)) fetchProfile(pubkey)
+        }
+    }
 
     if (sorted.isEmpty()) {
         Column(
@@ -203,7 +216,7 @@ private fun MutedUsersTab(
                 .padding(horizontal = 16.dp)
         ) {
             items(items = sorted, key = { it }) { pubkey ->
-                val profile = profileRepo.get(pubkey)
+                val profile = remember(pubkey, version) { profileRepo.get(pubkey) }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier

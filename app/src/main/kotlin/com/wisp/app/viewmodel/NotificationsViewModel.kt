@@ -79,7 +79,7 @@ class NotificationsViewModel(app: Application) : AndroidViewModel(app) {
     val replyReceived: SharedFlow<Unit>
         get() = notifRepo?.replyReceived ?: MutableSharedFlow()
 
-    val notifReceived: SharedFlow<Unit>
+    val notifReceived: SharedFlow<Int>
         get() = notifRepo?.notifReceived ?: MutableSharedFlow()
 
     val dmReceived: SharedFlow<Unit>

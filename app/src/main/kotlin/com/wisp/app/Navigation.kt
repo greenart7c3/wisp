@@ -111,6 +111,7 @@ import com.wisp.app.viewmodel.ProfileViewModel
 import com.wisp.app.viewmodel.RelayViewModel
 import com.wisp.app.viewmodel.ThreadViewModel
 import com.wisp.app.viewmodel.UserProfileViewModel
+import com.wisp.app.nostr.Nip88
 import com.wisp.app.viewmodel.NotificationFilter
 import com.wisp.app.viewmodel.NotificationsViewModel
 import com.wisp.app.viewmodel.ConsoleViewModel
@@ -497,13 +498,17 @@ fun WispNavHost(
     LaunchedEffect(Unit) { HapticHelper.init(context) }
     val currentNotifSoundEnabled by rememberUpdatedState(notifSoundEnabled)
     LaunchedEffect(Unit) {
-        notificationsViewModel.notifReceived.collect {
+        notificationsViewModel.notifReceived.collect { kind ->
             if (!currentNotifSoundEnabled) return@collect
             val enabled = notificationsViewModel.enabledTypes.value
-            val anyGenericEnabled = NotificationFilter.REACTIONS in enabled ||
-                NotificationFilter.REPOSTS in enabled ||
-                NotificationFilter.MENTIONS in enabled
-            if (anyGenericEnabled) {
+            val filter = when (kind) {
+                7 -> NotificationFilter.REACTIONS
+                6, 16 -> NotificationFilter.REPOSTS
+                1 -> NotificationFilter.MENTIONS
+                Nip88.KIND_POLL_RESPONSE -> NotificationFilter.VOTES
+                else -> null
+            }
+            if (filter == null || filter in enabled) {
                 notifBlipSound.play()
                 HapticHelper.blip()
             }
@@ -2536,6 +2541,8 @@ fun WispNavHost(
             SafetyScreen(
                 muteRepo = feedViewModel.muteRepo,
                 profileRepo = feedViewModel.profileRepo,
+                profileVersion = feedViewModel.eventRepo.profileVersion,
+                fetchProfile = { feedViewModel.forceProfileFetch(it) },
                 onBack = { navController.popBackStack() },
                 onChanged = { feedViewModel.updateMutedWords() }
             )
