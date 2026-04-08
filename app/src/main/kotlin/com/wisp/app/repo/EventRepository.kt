@@ -146,8 +146,8 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     // Per-target-event dedup sets — evict with the same lifecycle as their count caches
     private val countedReactionIds = LruCache<String, MutableSet<String>>(15000)
     private val countedZapIds = LruCache<String, MutableSet<String>>(15000)
-    // Reply dedup: track individual reply event IDs to prevent double-counting
-    private val countedReplyIds = ConcurrentHashMap.newKeySet<String>()
+    // Reply dedup: parentEventId -> set of counted reply event IDs (LRU so it evicts with replyCounts)
+    private val countedReplyIds = LruCache<String, MutableSet<String>>(15000)
     // Reply index: rootEventId -> set of reply event IDs (for thread cache seeding)
     private val rootReplyIds = ConcurrentHashMap<String, MutableSet<String>>()
 
@@ -926,7 +926,9 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     }
 
     fun addReplyCount(parentEventId: String, replyEventId: String): Boolean {
-        if (!countedReplyIds.add(replyEventId)) return false
+        val seen = countedReplyIds.get(parentEventId)
+            ?: mutableSetOf<String>().also { countedReplyIds.put(parentEventId, it) }
+        if (!seen.add(replyEventId)) return false
         rootReplyIds.getOrPut(parentEventId) { ConcurrentHashMap.newKeySet() }.add(replyEventId)
         val current = replyCounts.get(parentEventId) ?: 0
         replyCounts.put(parentEventId, current + 1)
@@ -1393,7 +1395,7 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
         userZaps.evictAll()
         countedReactionIds.evictAll()
         countedZapIds.evictAll()
-        countedReplyIds.clear()
+        countedReplyIds.evictAll()
         rootReplyIds.clear()
         _profileVersion.value = 0
         _quotedEventVersion.value = 0
