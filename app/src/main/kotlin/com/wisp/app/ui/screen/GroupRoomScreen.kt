@@ -359,7 +359,7 @@ fun GroupRoomScreen(
                 // Search bar
                 if (searchActive) {
                     val searchFocusRequester = remember { FocusRequester() }
-                    LaunchedEffect(Unit) { searchFocusRequester.requestFocus() }
+                    LaunchedEffect(Unit) { try { searchFocusRequester.requestFocus() } catch (_: IllegalStateException) {} }
 
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
