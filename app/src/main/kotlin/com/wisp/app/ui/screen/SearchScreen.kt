@@ -153,7 +153,7 @@ fun SearchScreen(
     val focusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
+        try { focusRequester.requestFocus() } catch (_: IllegalStateException) {}
         // Seed search refs so debounced auto-search works before first manual search
         viewModel.initSearchRefs(relayPool, eventRepo, muteRepo)
     }

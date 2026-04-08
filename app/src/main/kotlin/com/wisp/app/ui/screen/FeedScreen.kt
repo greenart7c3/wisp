@@ -2170,7 +2170,7 @@ private fun HashtagPickerDialog(
                         // Set header
                         if (renamingDTag == set.dTag) {
                             val renameFocusRequester = remember { FocusRequester() }
-                            LaunchedEffect(Unit) { renameFocusRequester.requestFocus() }
+                            LaunchedEffect(Unit) { try { renameFocusRequester.requestFocus() } catch (_: IllegalStateException) {} }
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
@@ -2257,7 +2257,7 @@ private fun HashtagPickerDialog(
                             // Add hashtag input for this set
                             if (addingToDTag == set.dTag) {
                                 val focusRequester = remember { FocusRequester() }
-                                LaunchedEffect(Unit) { focusRequester.requestFocus() }
+                                LaunchedEffect(Unit) { try { focusRequester.requestFocus() } catch (_: IllegalStateException) {} }
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth().padding(start = 8.dp, bottom = 4.dp)
@@ -2323,7 +2323,7 @@ private fun HashtagPickerDialog(
                     }
                 }
                 if (showNewSetField) {
-                    LaunchedEffect(Unit) { newSetFocusRequester.requestFocus() }
+                    LaunchedEffect(Unit) { try { newSetFocusRequester.requestFocus() } catch (_: IllegalStateException) {} }
                 }
                 Spacer(Modifier.size(4.dp))
                 Row(
