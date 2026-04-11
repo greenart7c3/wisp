@@ -1,12 +1,12 @@
 # NIP-19: Bech32-Encoded Entities
 
-**Status in Wisp:** Implemented (npub/nsec/note)
+**Status in Wisp:** Implemented (npub/nsec/nevent/naddr)
 **File:** `Nip19.kt`
 **Depends on:** NIP-01
 
 ## Overview
 
-Human-readable encoding for Nostr entities using Bech32/Bech32m.
+Human-readable encoding for Nostr entities using Bech32.
 
 ## Basic Types (Bech32)
 
@@ -14,7 +14,6 @@ Human-readable encoding for Nostr entities using Bech32/Bech32m.
 |--------|---------|--------|---------|
 | `npub` | Public key | 32 bytes | `npub1qqqq...` |
 | `nsec` | Private key | 32 bytes | `nsec1qqqq...` |
-| `note` | Event ID | 32 bytes | `note1qqqq...` |
 
 ### Encoding
 
@@ -36,7 +35,6 @@ Human-readable encoding for Nostr entities using Bech32/Bech32m.
 | `nprofile` | Profile + hints | pubkey + relay URLs |
 | `nevent` | Event + hints | event ID + relay URLs + author |
 | `naddr` | Replaceable event | kind + pubkey + d-tag + relay URLs |
-| `nrelay` | Relay URL | relay URL |
 
 ### TLV Format
 
@@ -72,7 +70,6 @@ TLV: [0x00][0x02][<d-tag-utf8>][0x01][0x18][wss://relay.example.com][0x02][0x20]
 Currently implements basic types only:
 - `Nip19.npubEncode(pubkey: ByteArray): String`
 - `Nip19.nsecEncode(privkey: ByteArray): String`
-- `Nip19.noteEncode(eventId: ByteArray): String`
 - `Nip19.npubDecode(npub: String): ByteArray`
 - `Nip19.nsecDecode(nsec: String): ByteArray`
 

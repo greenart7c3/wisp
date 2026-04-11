@@ -14,7 +14,6 @@ object Nip19 {
 
     fun npubEncode(pubkey: ByteArray): String = bech32Encode("npub", pubkey)
     fun nsecEncode(privkey: ByteArray): String = bech32Encode("nsec", privkey)
-    fun noteEncode(eventId: ByteArray): String = bech32Encode("note", eventId)
 
     fun nprofileEncode(pubkeyHex: String, relays: List<String> = emptyList()): String {
         val tlv = buildTlv {

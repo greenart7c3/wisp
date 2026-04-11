@@ -16,11 +16,7 @@ object Nip18 {
     }
 
     fun appendNoteUri(content: String, eventIdHex: String, relayHints: List<String> = emptyList(), authorHex: String? = null): String {
-        val id = if (relayHints.isNotEmpty() || authorHex != null) {
-            Nip19.neventEncode(eventIdHex.hexToByteArray(), relayHints, authorHex?.hexToByteArray())
-        } else {
-            Nip19.noteEncode(eventIdHex.hexToByteArray())
-        }
+        Nip19.neventEncode(eventIdHex.hexToByteArray(), relayHints, authorHex?.hexToByteArray())
         return "$content\nnostr:$id"
     }
 }
